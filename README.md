@@ -1,3 +1,7 @@
+# InterviewSystem
+
+A project scaffold for an interview system.
+Note: This branch contains Phase 0 backbone implementation (domain, events, eventlog, projections, orchestrator, rubric loader, contracts, and tests).
 # InterviewSystem — MVP Design Repo
 
 AI-powered technical interview platform for Data Science / ML Engineer candidates. This repo currently holds **design only** — architecture, roadmap, and agent templates. Code ships in Phase 0.
