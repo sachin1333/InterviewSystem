@@ -1,0 +1,41 @@
+---
+title: "USER.md — Candidate Profile & Rolling Observations"
+session_id: "{{ session.id }}"
+---
+
+# Candidate
+
+- **Role applied for:** {{ candidate.role }}
+- **Years of experience (self-reported):** {{ candidate.years_experience }}
+
+_No name, email, phone, address, photo, or demographic signal is loaded into this file. Do not infer any of them from the transcript or the profile fields below._
+
+## Declared skills
+
+{% for skill in candidate.declared_skills %}- {{ skill }}
+{% endfor %}
+
+## Projects (from profile)
+
+{% for p in candidate.projects %}- **{{ p.name }}** — {{ p.one_liner }} _(source: {{ p.source }})_
+{% endfor %}
+
+## Publications / writing (from profile)
+
+{% for pub in candidate.publications %}- [{{ pub.title }}]({{ pub.url }}) _(source: {{ pub.source }})_
+{% endfor %}
+
+## Claims the candidate has made publicly (use as anchor points, not as truth)
+
+_The Examiner may reference these to probe. They are statements the candidate has made — the interview's job is to see whether they hold up._
+
+{% for c in candidate.claims %}- "{{ c.text }}" _(source: {{ c.source }}, confidence: {{ c.confidence }})_
+{% endfor %}
+
+---
+
+# Rolling observations
+
+_Agents append here (bounded, auto-summarized) as the session progresses. One line per entry. This is the "what we've noticed so far" view every agent reads before its next turn._
+
+- _(empty at session start)_

@@ -1,0 +1,37 @@
+---
+title: "BOOT.md — Session Snapshot"
+generated_at: "{{ session.started_at }}"
+session_id: "{{ session.id }}"
+---
+
+# Session {{ session.id }}
+
+This file is materialized once, at `SessionStarted`. It is immutable for the life of the session and is part of the audit trail.
+
+## Interview template
+
+- **Template:** {{ template.name }} (v{{ template.version }})
+- **Role:** {{ template.role }}
+- **Rubric:** {{ template.rubric.name }} (v{{ template.rubric.version }})
+
+## Rubric dimensions (names only — weights are not disclosed to agents)
+
+{% for dim in template.rubric.dimensions %}- {{ dim.name }}
+{% endfor %}
+
+## Agents resolved for this session
+
+- Challenger: {{ agents.challenger.persona }}
+- Examiner: {{ agents.examiner.persona }}
+- Scorers: {{ agents.scorers | join(', ') }}
+
+## Runtime
+
+- Kind: {{ runtime.kind }}
+- Timeout per cell: {{ runtime.cell_timeout_s }}s
+
+## Constraints
+
+- Soft deadline: {{ session.soft_deadline_minutes }} minutes.
+- Hard deadline: {{ session.hard_deadline_minutes }} minutes.
+- Candidate may request one 5-minute break.
