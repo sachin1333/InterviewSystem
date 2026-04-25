@@ -91,6 +91,9 @@ class SessionRunner:
                 return RunResult(state="ended", session_id=session_id)
 
             if isinstance(action, NoAction):
+                s = sessions.get(session_id)
+                if s is not None and s["ended"]:
+                    return RunResult(state="ended", session_id=session_id)
                 return RunResult(state="no_op", session_id=session_id)
 
             if isinstance(action, RequestChallenge):

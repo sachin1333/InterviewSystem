@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Literal, Protocol
@@ -97,7 +98,7 @@ class ModelRouter:
             )
             text = self._response_text(response)
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(_extract_json(text))
             except json.JSONDecodeError:
                 if attempt == 0:
                     continue
@@ -166,3 +167,32 @@ class ModelRouter:
         if isinstance(response, str):
             return response
         return "".join(response)
+
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_json(text: str) -> str:
+    """Pull a JSON object out of model output that may wrap it in prose or fences."""
+    text = text.strip()
+    if not text:
+        return text
+    fence = _FENCE_RE.search(text)
+    if fence:
+        text = fence.group(1).strip()
+    if text.startswith("{") or text.startswith("["):
+        return text
+    # Fallback: locate the first {...} substring with balanced braces.
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return text[start:]
