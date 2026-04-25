@@ -1,0 +1,30 @@
+# Credentials — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.venv-sandbox/
+.venv-local/
+*.egg-info/
+dist/
+build/
+
+# Runtime artefacts
+*.db
+*.db-wal
+*.db-shm
+outputs/
+interview.db
+
+# Editor / tooling
+.claude/
+.DS_Store
+*.pptx
+
+# CI/test
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
