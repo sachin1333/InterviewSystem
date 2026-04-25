@@ -91,3 +91,13 @@ One of:
 - Bite-sized TDD task list for Phase 0.
 - Python skeleton for `core/` + contracts.
 - Streaming wire protocol (WebSocket message schema) for the candidate UI.
+
+**Runtime Sandbox**
+
+- **Adapter:** [adapters/runtime/subprocess_runtime.py](adapters/runtime/subprocess_runtime.py) — executes candidate Python in a short-lived subprocess and applies POSIX resource limits when available.
+- **Bootstrap adapter:** [adapters/runtime/runtime_adapter.py](adapters/runtime/runtime_adapter.py) — wraps the runtime and emits `RuntimeExecuted` / `RuntimeFailed` and `ArtifactAttached` events to the event log.
+- **Defaults:** memory cap ~512MB, CPU time cap ~10s (configurable in adapter constructor).
+- **Network:** the runtime sets `HTTP_PROXY` / `HTTPS_PROXY` to an unreachable host by default to make outbound network calls fail-fast. This is NOT a security sandbox — it reduces accidental network access but does not prevent all exfiltration.
+- **Platform notes:** POSIX `resource` limits and `preexec_fn` are applied only when available (Unix-like systems). On macOS and Linux these help mitigate runaway code; Windows behavior will be more permissive.
+- **Safety note:** This sandbox is best-effort. For production isolation use OS-level sandboxing (containers, seccomp, process namespaces) or a dedicated execution service. Treat `SubprocessRuntime` as a developer-grade mitigation, not a security boundary.
+

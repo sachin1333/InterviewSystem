@@ -4,6 +4,27 @@ from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
 from core import domain
+from core.events import Envelope
+
+
+@runtime_checkable
+class EventLog(Protocol):
+    """Append-only per-session event log. Sole source of truth for session state."""
+
+    def append(self, envelope: Envelope, idem_key: str | None = None) -> Envelope:
+        """Append an event. If `idem_key` is provided and an event with the same
+        key already exists for the session, return the existing envelope without
+        writing a duplicate.
+        """
+
+    def get_session(self, session_id: str) -> tuple[Envelope, ...]:
+        """Return all envelopes for `session_id` in seq order."""
+
+    def last_seq(self, session_id: str) -> int | None:
+        """Return the last seq for `session_id`, or None if empty."""
+
+    def all(self) -> tuple[Envelope, ...]:
+        """Return all envelopes across sessions. Order across sessions is unspecified."""
 
 
 @runtime_checkable

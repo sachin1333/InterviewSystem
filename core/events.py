@@ -19,8 +19,51 @@ class _Evt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+# --- session lifecycle ----------------------------------------------------
+
 class SessionStarted(_Evt):
     rubric_version: str
+    target_answers: int = Field(default=3, ge=1)
+    max_probes_per_prompt: int = Field(default=1, ge=0)
+    pack_id: str = "ds-ml-v1"  # default for back-compat
+
+
+class CandidateJoined(_Evt):
+    candidate_handle: str
+
+
+class SessionResumed(_Evt):
+    from_seq: int = Field(ge=1)
+
+
+class SessionEnded(_Evt):
+    reason: str | None = None
+
+
+class SessionTimedOut(_Evt):
+    reason: str
+    elapsed_s: int
+
+
+# --- cost tracking --------------------------------------------------------
+
+class BudgetExceeded(_Evt):
+    reason: str
+    est_cost_usd: float
+
+
+class TierFallback(_Evt):
+    from_tier: str
+    to_tier: str
+    reason: str
+
+
+# --- conversational flow --------------------------------------------------
+
+class TurnRequested(_Evt):
+    """Orchestrator dispatched a request to an adapter. Audit trail."""
+    of: Actor
+    kind: TurnKind
 
 
 class TurnPosted(_Evt):
@@ -34,7 +77,25 @@ class ArtifactAttached(_Evt):
     kind: ArtifactKind
     produced_by_turn_id: str
     version: int = Field(ge=1)
+    content: str | None = None
 
+
+# --- runtime execution ----------------------------------------------------
+
+class RuntimeExecuted(_Evt):
+    turn_id: str
+    exit_code: int
+    wall_ms: int = Field(ge=0)
+    artifact_id: str  # cell_output artifact
+
+
+class RuntimeFailed(_Evt):
+    turn_id: str
+    reason: str
+    wall_ms: int = Field(ge=0)
+
+
+# --- scoring --------------------------------------------------------------
 
 class SignalEmitted(_Evt):
     signal: Signal
@@ -44,28 +105,43 @@ class ScoreComputed(_Evt):
     score: Score
 
 
-class SessionEnded(_Evt):
-    reason: str | None = None
+# --- adapter failure audit -----------------------------------------------
 
+class ChallengerFailed(_Evt):
+    reason: str
+
+
+class ExaminerFailed(_Evt):
+    reason: str
+
+
+class ScorerFailed(_Evt):
+    dimension: Dimension
+    reason: str
+
+
+# --- candidate behavior / pacing -----------------------------------------
 
 class CandidateIdle(_Evt):
     idle_seconds: int
-
-
-class ProfileIngested(_Evt):
-    profile_id: str
-
-
-class BackchannelPosted(_Evt):
-    message: str
 
 
 class IdleThresholdCrossed(_Evt):
     threshold_s: int
 
 
+class BackchannelPosted(_Evt):
+    message: str
+
+
 class BreakDue(_Evt):
     reason: str
+
+
+# --- intake / human override ---------------------------------------------
+
+class ProfileIngested(_Evt):
+    profile_id: str
 
 
 class HumanOverride(_Evt):
@@ -76,16 +152,23 @@ class HumanOverride(_Evt):
     reason: str
 
 
-class SessionTimedOut(_Evt):
-    reason: str
-    elapsed_s: int
-
-
 EVENT_TYPES: set[type] = {
-    SessionStarted, TurnPosted, ArtifactAttached, SignalEmitted,
-    ScoreComputed, SessionEnded, CandidateIdle, ProfileIngested,
-    BackchannelPosted, IdleThresholdCrossed, BreakDue,
-    HumanOverride, SessionTimedOut,
+    # lifecycle
+    SessionStarted, CandidateJoined, SessionResumed, SessionEnded, SessionTimedOut,
+    # cost tracking
+    BudgetExceeded, TierFallback,
+    # flow
+    TurnRequested, TurnPosted, ArtifactAttached,
+    # runtime
+    RuntimeExecuted, RuntimeFailed,
+    # scoring
+    SignalEmitted, ScoreComputed,
+    # adapter failures
+    ChallengerFailed, ExaminerFailed, ScorerFailed,
+    # pacing
+    CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
+    # intake / override
+    ProfileIngested, HumanOverride,
 }
 
 
@@ -94,6 +177,7 @@ class Envelope(_Evt):
     seq: int = Field(gt=0)
     at: datetime
     payload: Any
+    idem_key: str | None = None
 
     @field_validator("payload")
     @classmethod
