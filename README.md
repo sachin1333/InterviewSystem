@@ -1,10 +1,43 @@
 # InterviewSystem
 
-A project scaffold for an interview system.
-Note: This branch contains Phase 0 backbone implementation (domain, events, eventlog, projections, orchestrator, rubric loader, contracts, and tests).
-# InterviewSystem — MVP Design Repo
+AI-powered technical interview platform for Data Science / ML Engineer candidates. The Phase 0–ζ vertical slice is live: event-sourced backbone, FSM orchestrator, LLM Challenger + Scorers via OpenRouter, sandboxed Python runtime, and a chat-style HTTP UI.
 
-AI-powered technical interview platform for Data Science / ML Engineer candidates. This repo currently holds **design only** — architecture, roadmap, and agent templates. Code ships in Phase 0.
+## Quick start
+
+```bash
+# 1. Install
+uv sync
+
+# 2. Configure LLM (OpenRouter or OpenAI). See .env.example.
+cp .env.example .env
+$EDITOR .env   # set OPENROUTER_API_KEY=sk-or-v1-...
+
+# 3. Run
+uv run uvicorn adapters.http.app:create_app --factory --reload --port 8000
+
+# 4. Open http://localhost:8000 and start an interview.
+```
+
+The candidate flow:
+1. Land on `/`, enter a handle, click **Start interview**.
+2. The Challenger LLM proposes a real-world DS/ML scenario (or a canned prompt if the model misses its 8s deadline).
+3. Chat back and forth — interviewer bubbles on the left, your replies on the right. `Enter` sends, `Shift+Enter` newlines, `+ add code` reveals an optional Python cell that runs in a sandboxed subprocess.
+4. When the answer budget is hit, two LLM scorers (rationale + communication) run, the rubric aggregator writes `outputs/{session_id}_feedback.md`, and you're redirected to the result page.
+
+Tests: `uv run pytest` (127 unit tests, no network).
+
+## Architecture in one paragraph
+
+A FastAPI surface ([adapters/http/app.py](adapters/http/app.py)) sits over a stateless `SessionRunner` that replays an append-only SQLite event log on every request and asks a pure FSM ([core/orchestrator.py](core/orchestrator.py)) what to do next: ask the Challenger for a question, run candidate code, request the Examiner for a probe, ask a Scorer for a signal, or aggregate the rubric. All LLM I/O goes through a 3-tier `ModelRouter` with a hard wall-clock deadline, automatic fallback chain (top → mid → cheap → canned), and JSON extraction tolerant of markdown fences.
+
+## How to read this folder
+
+Start here, in order:
+
+1. **[architecture-and-plan.md](./architecture-and-plan.md)** — the whole design. 13 sections covering first principles, domain model, backbone, MVP cut, phased roadmap, ADRs, agent-persona-as-data pattern, speed & humanly-interaction constraints, and candidate profile ingestion.
+2. **[CHANGELOG.md](./CHANGELOG.md)** — what was decided when.
+3. **[CLAUDE.md](./CLAUDE.md)** — project-level operating rules for contributors (AI or human).
+4. **`templates/`** — the runtime agent-persona layer. Markdown files loaded by adapters to compose LLM prompts. See map below.
 
 ## How to read this folder
 
@@ -65,32 +98,31 @@ templates/
 
 ## Roadmap at a glance
 
-| Phase | Ship | Prove it |
+| Phase | Ship | Status |
 |---|---|---|
-| 0 | Backbone skeleton (domain, event log, projections, orchestrator, contracts) | Unit test: hand-crafted events → expected next-action |
-| 1 | Thin slice end-to-end over HTTP with dummy adapters | Curl test: start session → get turn + score |
-| 1.5 | `CandidateIntake` with resume source; USER.md populated; consent screen | Upload resume → USER.md has claims + skills |
-| 2 | LLM Challenger, calibrated from USER.md | Golden-prompt test: generated question references rubric dimension |
-| 3 | LLM Examiner + humanly texture (streaming, pacing, backchannels, named persona) | Integration test + manual session; latency assertions pass |
-| 4 | Jupyter Runtime adapter (warm kernel) | Code cell executes; output attached as artifact |
-| 5 | Rationale + Communication Scorers; rubric aggregator | Fixture tests — known turn → expected signals |
-| 6 | Candidate UI + Recruiter dashboard | Playwright smoke + manual walkthrough |
-| post-MVP | Proctor, ATS sync, voice, bias audit, messy-data generator, LinkedIn/blog/GitHub profile sources | — |
+| 0 | Backbone skeleton (domain, event log, projections, orchestrator, contracts) | ✅ shipped |
+| 1 | Thin slice end-to-end over HTTP with dummy adapters | ✅ shipped |
+| 1.5 | `CandidateIntake` with resume source; USER.md populated; consent screen | planned |
+| 2 | LLM Challenger, calibrated from USER.md | ✅ shipped (no USER.md yet) |
+| 3 | LLM Examiner + humanly texture (streaming, pacing, backchannels, named persona) | partial |
+| 4 | Subprocess Runtime adapter (resource-limited) | ✅ shipped |
+| 5 | Rationale + Communication Scorers; rubric aggregator | ✅ shipped |
+| 6 | Candidate chat UI + Recruiter dashboard | ✅ chat UI; dashboard pending |
+| next | Voice UX over the same chat data shape | up next |
+| post-MVP | Proctor, ATS sync, bias audit, messy-data generator, LinkedIn/blog/GitHub profile sources | — |
 
 ## Non-goals (MVP)
 
 - Multiple specializations beyond DS/ML Engineer.
 - Real-time proctoring AI.
 - ATS / HRIS integration.
-- Voice UX.
 - Scale beyond ~50 concurrent sessions.
 
 ## Next up
 
-One of:
-- Bite-sized TDD task list for Phase 0.
-- Python skeleton for `core/` + contracts.
-- Streaming wire protocol (WebSocket message schema) for the candidate UI.
+- Voice surface (STT in, TTS out) reusing the existing `{role, text}` chat data shape.
+- `CandidateIntake` so the Challenger can calibrate from a real resume.
+- Recruiter dashboard over the event log.
 
 **Runtime Sandbox**
 
