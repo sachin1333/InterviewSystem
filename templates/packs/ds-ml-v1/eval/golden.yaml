@@ -1,0 +1,3 @@
+# Golden evaluation set for ds-ml-v1 pack.
+# Format: list of {candidate_text, expected_signals}
+golden_pairs: []

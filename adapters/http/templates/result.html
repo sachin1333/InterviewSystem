@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Interview Result — {{ session_id }}</title>
+  <style>
+    body { font-family: monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    .score-box { background: #f0f8f0; border-left: 4px solid #2a7; padding: 1rem; margin-bottom: 1.5rem; }
+    pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; overflow-wrap: break-word; }
+    .no-score { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Interview Complete</h1>
+  <p>Session: <code>{{ session_id }}</code></p>
+
+  {% if score %}
+  <div class="score-box">
+    <strong>Composite score: {{ "%.2f"|format(score.composite) }}</strong>
+    <br>Rubric: {{ score.rubric_version }}
+    <ul>
+    {% for dim, val in score.per_dimension.items() %}
+      <li>{{ dim }}: {{ "%.2f"|format(val) }}</li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% else %}
+  <p class="no-score">Score not yet computed.</p>
+  {% endif %}
+
+  {% if feedback_md %}
+  <h2>Detailed feedback</h2>
+  <pre>{{ feedback_md }}</pre>
+  {% endif %}
+
+  <p><a href="/">Start a new interview</a></p>
+</body>
+</html>

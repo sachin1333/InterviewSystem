@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Interview — session {{ session_id }}</title>
+  <style>
+    body { font-family: monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    .prompt-box { background: #f4f4f4; border-left: 4px solid #333; padding: 1rem; white-space: pre-wrap; }
+    label { display: block; margin: 1rem 0 0.3rem; font-weight: bold; }
+    textarea { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.95rem;
+               padding: 0.4rem; resize: vertical; }
+    .note { color: #555; font-size: 0.85rem; margin-top: 0.3rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1.5rem; font-size: 1rem; cursor: pointer; }
+    .kind-badge { font-size: 0.8rem; background: #e8e8e8; padding: 0.2rem 0.5rem;
+                  border-radius: 3px; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+  <h2>Interview <span class="kind-badge">{{ turn_kind }}</span></h2>
+  <div class="prompt-box">{{ display_text }}</div>
+
+  <form method="post" action="/sessions/{{ session_id }}/turn">
+    <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
+
+    <label for="answer">
+      {% if turn_kind == "defense" %}Your response to the follow-up{% else %}Your answer{% endif %}
+    </label>
+    <textarea id="answer" name="answer" rows="8"
+      placeholder="Explain your reasoning, assumptions, and trade-offs…"></textarea>
+    <p class="note">Focus on <em>why</em> you made each choice. Clarity matters more than length.</p>
+
+    <label for="code">Code (optional)</label>
+    <textarea id="code" name="code" rows="10"
+      placeholder="# Paste or write any Python code here (will be executed)"></textarea>
+    <p class="note">Leave blank if you prefer to explain in prose above.</p>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>

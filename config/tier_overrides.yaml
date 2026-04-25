@@ -1,0 +1,4 @@
+# Task-level tier overrides (task_key: tier).
+# Overrides TASK_TIER_MAP in adapters/llm/task_tier_map.py
+# Example:
+# scorer.communication: top

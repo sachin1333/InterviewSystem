@@ -1,0 +1,14 @@
+# Tier → model + pricing (per 1M tokens, USD)
+tiers:
+  cheap:
+    default_model: "meta-llama/llama-3.1-8b-instruct"
+    input_price_per_1m: 0.10
+    output_price_per_1m: 0.10
+  mid:
+    default_model: "deepseek/deepseek-v3"
+    input_price_per_1m: 0.27
+    output_price_per_1m: 1.10
+  top:
+    default_model: "moonshotai/kimi-k2.6"
+    input_price_per_1m: 0.60
+    output_price_per_1m: 2.50
