@@ -4,37 +4,117 @@
   <meta charset="utf-8">
   <title>Interview — session {{ session_id }}</title>
   <style>
-    body { font-family: monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-    .prompt-box { background: #f4f4f4; border-left: 4px solid #333; padding: 1rem; white-space: pre-wrap; }
-    label { display: block; margin: 1rem 0 0.3rem; font-weight: bold; }
-    textarea { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 0.95rem;
-               padding: 0.4rem; resize: vertical; }
-    .note { color: #555; font-size: 0.85rem; margin-top: 0.3rem; }
-    button { margin-top: 1rem; padding: 0.5rem 1.5rem; font-size: 1rem; cursor: pointer; }
-    .kind-badge { font-size: 0.8rem; background: #e8e8e8; padding: 0.2rem 0.5rem;
-                  border-radius: 3px; text-transform: uppercase; }
+    :root {
+      --bg: #f7f7f8;
+      --bubble-them: #ffffff;
+      --bubble-you: #2f6df5;
+      --bubble-you-text: #ffffff;
+      --border: #e3e3e6;
+      --text: #1a1a1a;
+      --muted: #6b6b70;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .app { display: flex; flex-direction: column; height: 100vh; max-width: 760px; margin: 0 auto;
+           background: var(--bg); }
+    .header { padding: 0.9rem 1.2rem; border-bottom: 1px solid var(--border); background: #fff;
+              display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+    .header .meta { font-size: 0.8rem; color: var(--muted); }
+    .chat { flex: 1; overflow-y: auto; padding: 1.2rem; display: flex; flex-direction: column;
+            gap: 0.8rem; }
+    .msg { display: flex; max-width: 85%; }
+    .msg.interviewer { align-self: flex-start; }
+    .msg.candidate { align-self: flex-end; }
+    .bubble { padding: 0.7rem 0.95rem; border-radius: 1.1rem; line-height: 1.45;
+              white-space: pre-wrap; word-wrap: break-word; font-size: 0.95rem; }
+    .msg.interviewer .bubble { background: var(--bubble-them); color: var(--text);
+                               border: 1px solid var(--border); border-bottom-left-radius: 0.3rem; }
+    .msg.candidate .bubble { background: var(--bubble-you); color: var(--bubble-you-text);
+                             border-bottom-right-radius: 0.3rem; }
+    .role { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.2rem;
+            text-transform: uppercase; letter-spacing: 0.04em; }
+    .composer { border-top: 1px solid var(--border); background: #fff; padding: 0.8rem 1rem;
+                display: flex; flex-direction: column; gap: 0.5rem; }
+    .composer textarea { width: 100%; resize: none; border: 1px solid var(--border);
+                         border-radius: 0.7rem; padding: 0.6rem 0.8rem; font-size: 0.95rem;
+                         font-family: inherit; min-height: 56px; max-height: 220px; outline: none; }
+    .composer textarea:focus { border-color: var(--bubble-you); }
+    .composer .row { display: flex; gap: 0.6rem; align-items: flex-end; }
+    .composer .row textarea { flex: 1; }
+    .composer button { background: var(--bubble-you); color: #fff; border: 0;
+                       border-radius: 0.7rem; padding: 0.6rem 1.1rem; font-size: 0.95rem;
+                       cursor: pointer; font-weight: 500; }
+    .composer button:hover { filter: brightness(1.05); }
+    .code-toggle { font-size: 0.8rem; color: var(--muted); background: none; border: 0;
+                   cursor: pointer; padding: 0; align-self: flex-start; text-decoration: underline;
+                   margin-top: -0.2rem; }
+    .code-area { display: none; }
+    .code-area.open { display: block; }
+    .code-area textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                          font-size: 0.85rem; min-height: 120px; }
+    .empty { color: var(--muted); font-size: 0.9rem; text-align: center; margin-top: 2rem; }
   </style>
 </head>
 <body>
-  <h2>Interview <span class="kind-badge">{{ turn_kind }}</span></h2>
-  <div class="prompt-box">{{ display_text }}</div>
+  <div class="app">
+    <div class="header">
+      <h1>Interview</h1>
+      <span class="meta">{{ turn_kind }} · {{ session_id }}</span>
+    </div>
 
-  <form method="post" action="/sessions/{{ session_id }}/turn">
-    <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
+    <div class="chat" id="chat">
+      {% if not messages %}
+        <div class="empty">Waiting for the interviewer…</div>
+      {% endif %}
+      {% for m in messages %}
+        <div class="msg {{ m.role }}">
+          <div>
+            <div class="role">{{ "Interviewer" if m.role == "interviewer" else "You" }}</div>
+            <div class="bubble">{{ m.text }}</div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
 
-    <label for="answer">
-      {% if turn_kind == "defense" %}Your response to the follow-up{% else %}Your answer{% endif %}
-    </label>
-    <textarea id="answer" name="answer" rows="8"
-      placeholder="Explain your reasoning, assumptions, and trade-offs…"></textarea>
-    <p class="note">Focus on <em>why</em> you made each choice. Clarity matters more than length.</p>
+    <form class="composer" method="post" action="/sessions/{{ session_id }}/turn" id="composer">
+      <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
+      <div class="row">
+        <textarea id="answer" name="answer" rows="2" autofocus
+          placeholder="{% if turn_kind == 'defense' %}Respond to the follow-up…{% else %}Type your answer…{% endif %}"></textarea>
+        <button type="submit">Send</button>
+      </div>
+      <button type="button" class="code-toggle" onclick="document.getElementById('code-wrap').classList.toggle('open')">
+        + add code
+      </button>
+      <div class="code-area" id="code-wrap">
+        <textarea id="code" name="code" rows="6"
+          placeholder="# Optional Python code (will be executed)"></textarea>
+      </div>
+    </form>
+  </div>
 
-    <label for="code">Code (optional)</label>
-    <textarea id="code" name="code" rows="10"
-      placeholder="# Paste or write any Python code here (will be executed)"></textarea>
-    <p class="note">Leave blank if you prefer to explain in prose above.</p>
+  <script>
+    // Auto-scroll chat to bottom on load.
+    const chat = document.getElementById('chat');
+    chat.scrollTop = chat.scrollHeight;
 
-    <button type="submit">Submit</button>
-  </form>
+    // Submit on Enter, newline on Shift+Enter.
+    const answer = document.getElementById('answer');
+    const composer = document.getElementById('composer');
+    answer.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (answer.value.trim()) composer.submit();
+      }
+    });
+
+    // Auto-grow textarea.
+    answer.addEventListener('input', () => {
+      answer.style.height = 'auto';
+      answer.style.height = Math.min(answer.scrollHeight, 220) + 'px';
+    });
+  </script>
 </body>
 </html>

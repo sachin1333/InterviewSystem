@@ -29,6 +29,29 @@ from core.session_boot import replay
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
+def _conversation_messages(session_id: str, log: EventLog) -> list[dict[str, str]]:
+    """Build an ordered list of {role, text} messages for the chat view."""
+    sessions, _, _, _, artifacts = replay(session_id, log)
+    s = sessions.get(session_id)
+    if s is None:
+        return []
+    out: list[dict[str, str]] = []
+    for turn in s["turns"]:
+        role = "interviewer" if turn["actor"] in (Actor.challenger, Actor.examiner) else "candidate"
+        # Concatenate all artifacts produced by this turn (usually one).
+        chunks: list[str] = []
+        for aid, tid in s["artifact_turn"].items():
+            if tid != turn["id"]:
+                continue
+            body = artifacts.get(aid)
+            if body:
+                chunks.append(body)
+        if not chunks:
+            continue
+        out.append({"role": role, "text": "\n\n".join(chunks)})
+    return out
+
+
 def make_app(
     *,
     log: EventLog,
@@ -110,9 +133,10 @@ def make_app(
             return RedirectResponse(f"/sessions/{session_id}/result", status_code=303)
 
         turn_kind = (result.turn_kind or TurnKind.answer).value
+        messages = _conversation_messages(session_id, _log)
         return templates.TemplateResponse(request, "turn.html", {
             "session_id": session_id,
-            "display_text": result.display_text or "(waiting for question…)",
+            "messages": messages,
             "turn_kind": turn_kind,
             "turn_nonce": uuid.uuid4().hex,
         })
