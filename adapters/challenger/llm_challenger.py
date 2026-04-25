@@ -68,12 +68,16 @@ class LlmChallenger(Challenger):
                 tier="top",
                 prompt=self._compose_prompt(session_id),
                 schema={"prompt_markdown", "turn_kind"},
-                deadline_ms=2000,
+                deadline_ms=8000,
             )
         except Exception:
             return [self._fallback_prompt()]
 
         prompt_markdown = payload.get("prompt_markdown")
-        if isinstance(prompt_markdown, str) and prompt_markdown.strip():
+        if (
+            isinstance(prompt_markdown, str)
+            and prompt_markdown.strip()
+            and not prompt_markdown.startswith("Fallback prompt:")
+        ):
             return [prompt_markdown]
         return [self._fallback_prompt()]

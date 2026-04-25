@@ -54,14 +54,19 @@ class ModelRouter:
         deadline_ms: int | None = None,
     ) -> RouterResponse:
         tier_timeout = self._get_timeout(tier)
-        effective_timeout = (
-            min(deadline_ms / 1000.0, tier_timeout)
-            if deadline_ms is not None
-            else tier_timeout
+        deadline = (
+            time.monotonic() + deadline_ms / 1000.0 if deadline_ms is not None else None
         )
         last_exc: Exception | None = None
 
         for attempt in range(1, self.max_retries + 1):
+            remaining = (deadline - time.monotonic()) if deadline is not None else None
+            if remaining is not None and remaining <= 0:
+                last_exc = last_exc or TimeoutError("deadline exceeded")
+                break
+            effective_timeout = (
+                min(remaining, tier_timeout) if remaining is not None else tier_timeout
+            )
             try:
                 return self.provider.call(
                     tier=tier,
@@ -71,13 +76,18 @@ class ModelRouter:
                 )
             except TimeoutError as exc:
                 last_exc = exc
-                fallback = self._call_fallback(tier=tier, prompt=prompt, stream=stream)
-                if fallback is not None:
-                    return fallback
+                if deadline is None or (deadline - time.monotonic()) > 0:
+                    fallback = self._call_fallback(
+                        tier=tier, prompt=prompt, stream=stream, deadline=deadline,
+                    )
+                    if fallback is not None:
+                        return fallback
             except Exception as exc:
                 last_exc = exc
 
             if attempt < self.max_retries:
+                if deadline is not None and (deadline - time.monotonic()) <= 0:
+                    break
                 self.sleep(0.1 * (2 ** (attempt - 1)))
 
         if isinstance(last_exc, TimeoutError):
@@ -128,7 +138,12 @@ class ModelRouter:
         }[tier]
 
     def _call_fallback(
-        self, *, tier: Tier, prompt: str, stream: bool
+        self,
+        *,
+        tier: Tier,
+        prompt: str,
+        stream: bool,
+        deadline: float | None = None,
     ) -> RouterResponse | None:
         """Fallback chain: top -> mid -> cheap -> placeholder."""
         fallback_tier: Tier | None = None
@@ -140,8 +155,13 @@ class ModelRouter:
         if fallback_tier is None:
             return self._placeholder_response(stream=stream)
 
+        if deadline is not None and (deadline - time.monotonic()) <= 0:
+            return self._placeholder_response(stream=stream)
+
         try:
             fallback_timeout = self._get_timeout(fallback_tier)
+            if deadline is not None:
+                fallback_timeout = min(fallback_timeout, deadline - time.monotonic())
             return self.provider.call(
                 tier=fallback_tier,
                 prompt=prompt,
@@ -150,11 +170,11 @@ class ModelRouter:
             )
         except TimeoutError:
             return self._call_fallback(
-                tier=fallback_tier, prompt=prompt, stream=stream
+                tier=fallback_tier, prompt=prompt, stream=stream, deadline=deadline,
             )
         except Exception:
             return self._call_fallback(
-                tier=fallback_tier, prompt=prompt, stream=stream
+                tier=fallback_tier, prompt=prompt, stream=stream, deadline=deadline,
             )
 
     def _placeholder_response(self, *, stream: bool) -> RouterResponse:
