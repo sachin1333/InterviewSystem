@@ -4,10 +4,19 @@ import json
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 type Tier = Literal["cheap", "mid", "top"]
 type RouterResponse = str | Iterable[str]
+
+
+@dataclass(frozen=True)
+class StreamingMetrics:
+    text: str
+    ttft_ms: int
+    total_ms: int
+
 
 CHEAP_TIMEOUT_PLACEHOLDER = (
     '{"prompt_markdown":"Fallback prompt: explain your approach, assumptions, and trade-offs.",'
@@ -129,6 +138,31 @@ class ModelRouter:
             raise ValueError(f"model JSON missing required keys: {sorted(missing)}")
 
         raise AssertionError("unreachable")
+
+    def call_streaming_with_metrics(
+        self, *, tier: Tier, prompt: str
+    ) -> StreamingMetrics:
+        """Call the provider in streaming mode and capture TTFT and total latency."""
+        start = time.monotonic()
+        iterator = self.call(tier=tier, prompt=prompt, stream=True)
+
+        # Handle case where provider returned a single string despite stream=True
+        if isinstance(iterator, str):
+            total_ms = int((time.monotonic() - start) * 1000)
+            return StreamingMetrics(text=iterator, ttft_ms=0, total_ms=total_ms)
+
+        it = iter(iterator)
+        first = next(it, None)
+
+        # Handle empty response
+        if first is None or first == "":
+            return StreamingMetrics(text="", ttft_ms=0, total_ms=0)
+
+        ttft_ms = int((time.monotonic() - start) * 1000)
+        rest = "".join(it)
+        total_ms = int((time.monotonic() - start) * 1000)
+
+        return StreamingMetrics(text=first + rest, ttft_ms=ttft_ms, total_ms=total_ms)
 
     def _get_timeout(self, tier: Tier) -> float:
         return {

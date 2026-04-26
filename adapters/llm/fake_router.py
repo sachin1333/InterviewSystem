@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TypedDict
 
 
@@ -44,7 +44,7 @@ class FakeRouter:
         prompt: str,
         stream: bool = False,
         timeout: float | None = None,
-    ) -> str:
+    ) -> str | Iterable[str]:
         prompt_hash = self.prompt_hash(prompt)
         self.calls.append(
             {
@@ -65,20 +65,32 @@ class FakeRouter:
         if fail_mode == "rate_limit":
             raise RuntimeError("rate_limit")
         if fail_mode == "malformed":
-            return "}{ not a valid JSON or expected shape"
-        if fail_mode == "empty":
-            return ""
+            response = "}{ not a valid JSON or expected shape"
+        elif fail_mode == "empty":
+            response = ""
+        else:
+            scripted = self._scripted_responses.get(prompt_hash)
+            if scripted:
+                response = scripted.pop(0)
+                if not scripted:
+                    self._scripted_responses.pop(prompt_hash, None)
+            else:
+                response = (
+                    '{"turn_kind":"question",'
+                    f'"prompt_markdown":"Generated prompt {prompt_hash}",'
+                    '"artifact_refs":[],'
+                    '"soft_deadline_minutes":45}'
+                )
 
-        scripted = self._scripted_responses.get(prompt_hash)
-        if scripted:
-            response = scripted.pop(0)
-            if not scripted:
-                self._scripted_responses.pop(prompt_hash, None)
-            return response
+        if stream:
+            return self._chunk(response)
+        return response
 
-        return (
-            '{"turn_kind":"question",'
-            f'"prompt_markdown":"Generated prompt {prompt_hash}",'
-            '"artifact_refs":[],'
-            '"soft_deadline_minutes":45}'
-        )
+    @staticmethod
+    def _chunk(text: str) -> Iterable[str]:
+        if not text:
+            yield ""
+            return
+        parts = text.split(" ")
+        for i, p in enumerate(parts):
+            yield p if i == 0 else " " + p
