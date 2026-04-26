@@ -265,6 +265,7 @@ class VoiceInterface {
     if (!voiceBar) return;
 
     this.voiceMode = voiceBar.getAttribute('data-voice-mode') === 'on';
+    this.allowTextSwitch = voiceBar.getAttribute('data-allow-text-switch') === 'true';
     if (!this.voiceMode) {
       console.log('Voice mode disabled');
       return;
@@ -426,6 +427,7 @@ class VoiceInterface {
   }
 
   switchToText() {
+    if (!this.allowTextSwitch) return;
     console.log('Switching to text mode');
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const msg = {
@@ -433,6 +435,15 @@ class VoiceInterface {
         mode: 'text',
       };
       this.send(msg);
+    }
+    const details = document.querySelector('details[data-mode="text"]');
+    if (details) {
+      details.open = true;
+    }
+    const textarea = document.getElementById('answer');
+    if (textarea) {
+      textarea.focus();
+      textarea.placeholder = 'Type your answer here';
     }
   }
 

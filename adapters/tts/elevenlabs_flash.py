@@ -4,6 +4,8 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
+from http.client import HTTPResponse
+from typing import cast
 from urllib import request as urllib_request
 from urllib.error import URLError
 
@@ -57,9 +59,12 @@ class ElevenLabsFlashTts:
             method="POST",
         )
 
-        def _open():
+        def _open() -> HTTPResponse:
             try:
-                return urllib_request.urlopen(req, timeout=self.first_byte_timeout_s + 5.0)
+                return cast(
+                    HTTPResponse,
+                    urllib_request.urlopen(req, timeout=self.first_byte_timeout_s + 5.0),
+                )
             except TimeoutError as exc:
                 raise TtsTimeout(f"elevenlabs timeout: {exc}") from exc
             except URLError as exc:

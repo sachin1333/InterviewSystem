@@ -1,6 +1,6 @@
 # InterviewSystem
 
-AI-powered technical interview platform for Data Science / ML Engineer candidates. The Phase 0–ζ vertical slice is live: event-sourced backbone, FSM orchestrator, LLM Challenger + Scorers via OpenRouter, sandboxed Python runtime, and a chat-style HTTP UI.
+AI-powered technical interview platform for Data Science / ML Engineer candidates. The Phase 0–η voice slice is live: event-sourced backbone, FSM orchestrator, LLM Challenger + Scorers via OpenRouter, sandboxed Python runtime, chat-style HTTP UI, and an opt-in voice interview path.
 
 ## Quick start
 
@@ -22,9 +22,34 @@ The candidate flow:
 1. Land on `/`, enter a handle, click **Start interview**.
 2. The Challenger LLM proposes a real-world DS/ML scenario (or a canned prompt if the model misses its 8s deadline).
 3. Chat back and forth — interviewer bubbles on the left, your replies on the right. `Enter` sends, `Shift+Enter` newlines, `+ add code` reveals an optional Python cell that runs in a sandboxed subprocess.
-4. When the answer budget is hit, two LLM scorers (rationale + communication) run, the rubric aggregator writes `outputs/{session_id}_feedback.md`, and you're redirected to the result page.
+4. When the answer budget is hit, the configured scorers run, the rubric aggregator writes `outputs/{session_id}_feedback.md`, and you're redirected to the result page.
 
 Tests: `uv run pytest` (127 unit tests, no network).
+
+## Voice mode
+
+`create_app()` now supports a feature-flagged voice path.
+
+- `VOICE_MODE=off` (default): existing text-only experience.
+- `VOICE_MODE=on`: voice UI is shown; the candidate can manually switch to typing.
+- `VOICE_MODE=forced`: voice UI is shown and manual switching is hidden; the text panel still opens automatically for text-heavy stages.
+
+```bash
+VOICE_MODE=off uv run uvicorn adapters.http.app:create_app --factory
+VOICE_MODE=on uv run uvicorn adapters.http.app:create_app --factory
+```
+
+### Voice env vars
+
+| Variable | Required? | Default | Purpose |
+|---|---|---|---|
+| `VOICE_MODE` | no | `off` | Voice UI visibility / policy |
+| `WISPR_API_KEY` | when `VOICE_MODE!=off` and using real STT | — | Wispr Flow streaming STT |
+| `CARTESIA_API_KEY` | optional | — | Primary Cartesia Sonic TTS |
+| `ELEVENLABS_API_KEY` | optional | — | ElevenLabs Flash fallback TTS |
+| `VOICE_LATENCY_BUDGET_MS` | no | `800` | Soft SLA for voice-turn latency monitoring |
+
+If the voice provider keys are missing, the app falls back to deterministic fake STT/TTS adapters so the browser flow and tests still work offline.
 
 ## Architecture in one paragraph
 
@@ -108,7 +133,7 @@ templates/
 | 4 | Subprocess Runtime adapter (resource-limited) | ✅ shipped |
 | 5 | Rationale + Communication Scorers; rubric aggregator | ✅ shipped |
 | 6 | Candidate chat UI + Recruiter dashboard | ✅ chat UI; dashboard pending |
-| next | Voice UX over the same chat data shape | up next |
+| next | Recruiter workflows + stronger candidate intake | up next |
 | post-MVP | Proctor, ATS sync, bias audit, messy-data generator, LinkedIn/blog/GitHub profile sources | — |
 
 ## Non-goals (MVP)
@@ -120,9 +145,9 @@ templates/
 
 ## Next up
 
-- Voice surface (STT in, TTS out) reusing the existing `{role, text}` chat data shape.
 - `CandidateIntake` so the Challenger can calibrate from a real resume.
 - Recruiter dashboard over the event log.
+- Production-hardening the voice adapters (real latency telemetry, stronger resume-deep-dive prompts, richer fallback UX).
 
 **Runtime Sandbox**
 
@@ -132,4 +157,3 @@ templates/
 - **Network:** the runtime sets `HTTP_PROXY` / `HTTPS_PROXY` to an unreachable host by default to make outbound network calls fail-fast. This is NOT a security sandbox — it reduces accidental network access but does not prevent all exfiltration.
 - **Platform notes:** POSIX `resource` limits and `preexec_fn` are applied only when available (Unix-like systems). On macOS and Linux these help mitigate runaway code; Windows behavior will be more permissive.
 - **Safety note:** This sandbox is best-effort. For production isolation use OS-level sandboxing (containers, seccomp, process namespaces) or a dedicated execution service. Treat `SubprocessRuntime` as a developer-grade mitigation, not a security boundary.
-

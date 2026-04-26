@@ -13,9 +13,10 @@ import asyncio
 import base64
 import contextlib
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -35,7 +36,7 @@ from core.contracts import EventLog
 from core.domain import Actor, ArtifactKind, TurnKind
 from core.events import ArtifactAttached, CandidateJoined, Envelope, SessionStarted, TurnPosted
 from core.pack_loader import PackRegistry
-from core.primitives import PRIMITIVE_REGISTRY
+from core.primitives import Primitive
 from core.session_boot import replay
 
 if TYPE_CHECKING:
@@ -78,6 +79,8 @@ def make_app(
     output_dir: Path | str | None = None,
     pack_registry: PackRegistry | None = None,
     voice_runner: VoiceRunner | None = None,
+    voice_mode: str = "off",
+    voice_latency_budget_ms: int = 800,
 ) -> FastAPI:
     """Return a configured FastAPI application.
 
@@ -98,6 +101,8 @@ def make_app(
     app.state.rubric_version = rubric_version
     app.state.pack_registry = pack_registry or PackRegistry()
     app.state.voice_runner = voice_runner
+    app.state.voice_mode = voice_mode
+    app.state.voice_latency_budget_ms = voice_latency_budget_ms
 
     # ------------------------------------------------------------------ #
     #  Start page                                                          #
@@ -160,7 +165,9 @@ def make_app(
             "messages": messages,
             "turn_kind": turn_kind,
             "turn_nonce": uuid.uuid4().hex,
-            "voice_mode": False,
+            "voice_mode": app.state.voice_mode != "off",
+            "voice_mode_setting": app.state.voice_mode,
+            "allow_text_switch": app.state.voice_mode == "on",
         })
 
     # ------------------------------------------------------------------ #
@@ -308,7 +315,7 @@ def make_app(
         # Queue to bridge sync WS recv loop → async iterator.
         audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
-        async def _audio_iterator():
+        async def _audio_iterator() -> AsyncIterator[bytes]:
             """Async iterator over queued audio bytes. Stops at None sentinel."""
             while True:
                 chunk = await audio_queue.get()
@@ -324,19 +331,23 @@ def make_app(
                     msg_type = data.get("type")
 
                     if msg_type == "audio_chunk":
-                        msg: ClientAudioChunk = data  # type: ignore
-                        if msg["seq"] == -1:
+                        if not isinstance(data, dict):
+                            continue
+                        audio_msg = cast(ClientAudioChunk, data)
+                        if audio_msg["seq"] == -1:
                             # End-of-stream sentinel
                             await audio_queue.put(None)
                             break
                         else:
                             # Decode base64 PCM
-                            pcm_bytes = base64.b64decode(msg["pcm_b64"])
+                            pcm_bytes = base64.b64decode(audio_msg["pcm_b64"])
                             await audio_queue.put(pcm_bytes)
 
                     elif msg_type == "mode_switch":
-                        msg: ClientModeSwitch = data  # type: ignore
-                        if msg["mode"] == "text":
+                        if not isinstance(data, dict):
+                            continue
+                        mode_msg = cast(ClientModeSwitch, data)
+                        if mode_msg["mode"] == "text":
                             # Close the voice channel gracefully.
                             await audio_queue.put(None)
                             await websocket.close(code=1000, reason="switched to text mode")
@@ -387,13 +398,12 @@ def make_app(
                 }
                 await websocket.send_json(tts_msg)
 
-            # Determine show_text_panel based on primitive's cheating_defense flag.
+            # Determine whether the next stage benefits from the text panel.
             next_stage = result.case_stage
             next_case = voice_runner.case
             next_stage_obj = next((s for s in next_case.stages if s.id == next_stage), None)
             if next_stage_obj:
-                primitive_spec = PRIMITIVE_REGISTRY.get(next_stage_obj.primitive)
-                show_text_panel = primitive_spec.cheating_defense if primitive_spec else True
+                show_text_panel = _primitive_needs_text_panel(next_stage_obj.primitive)
             else:
                 show_text_panel = True
 
@@ -436,25 +446,74 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     load_dotenv(dotenv_path=_Path(__file__).parent.parent.parent / ".env", override=False)
 
     from adapters.challenger.llm_challenger import LlmChallenger
+    from adapters.http.voice_runner import VoiceRunner
     from adapters.llm.factory import get_model_router
     from adapters.scorer.aggregator import RubricAggregator
+    from adapters.scorer.authenticity_scorer import AuthenticityScorer
     from adapters.scorer.llm_communication_scorer import LlmCommunicationScorer
+    from adapters.scorer.llm_insight_interp_scorer import LlmInsightInterpScorer
+    from adapters.scorer.llm_problem_framing_scorer import LlmProblemFramingScorer
     from adapters.scorer.llm_rationale_scorer import LlmRationaleScorer
+    from adapters.stt.factory import make_stt
+    from adapters.tts.cartesia_sonic import CartesiaSonicTts
+    from adapters.tts.elevenlabs_flash import ElevenLabsFlashTts
+    from adapters.tts.fake_tts import FakeTts
+    from adapters.tts.fallback_chain import FallbackChainTts
     from core.domain import Dimension
 
     log = SqliteEventLog(db_path)
     router = get_model_router()
+    voice_mode = os.getenv("VOICE_MODE", "off").strip().lower() or "off"
+    if voice_mode not in {"off", "on", "forced"}:
+        voice_mode = "off"
+    voice_latency_budget_ms = int(os.getenv("VOICE_LATENCY_BUDGET_MS", "800"))
     rubric_path = _Path("templates") / "rubrics" / "ds-ml-engineer-v1.yaml"
     output_dir = _Path(os.getenv("OUTPUT_DIR", "outputs"))
     aggregator = RubricAggregator.from_yaml(rubric_path, output_dir=output_dir)
+    communication_scorer = LlmCommunicationScorer(router)
 
     runner = SessionRunner(
         challenger=LlmChallenger(router),
         scorers={
             Dimension.model_rationale: LlmRationaleScorer(router),
-            Dimension.communication: LlmCommunicationScorer(router),
+            Dimension.communication: communication_scorer,
+            Dimension.problem_framing: LlmProblemFramingScorer(router),
+            Dimension.insight_interp: LlmInsightInterpScorer(router),
         },
         aggregator=aggregator,
-        scored_dimensions=(Dimension.model_rationale, Dimension.communication),
+        scored_dimensions=(
+            Dimension.problem_framing,
+            Dimension.model_rationale,
+            Dimension.insight_interp,
+            Dimension.communication,
+        ),
     )
-    return make_app(log=log, runner=runner, output_dir=output_dir)
+    voice_runner = None
+    if voice_mode != "off":
+        primary_tts = CartesiaSonicTts()
+        fallback_tts = ElevenLabsFlashTts()
+        tts = (
+            FallbackChainTts(primary_tts, fallback_tts)
+            if (os.getenv("CARTESIA_API_KEY") or os.getenv("ELEVENLABS_API_KEY"))
+            else FakeTts(bytes_per_char=2)
+        )
+        voice_runner = VoiceRunner(
+            log=log,
+            router=router,
+            stt=make_stt(),
+            tts=tts,
+            communication_scorer=communication_scorer,
+            authenticity_scorer=AuthenticityScorer(),
+        )
+    return make_app(
+        log=log,
+        runner=runner,
+        output_dir=output_dir,
+        voice_runner=voice_runner,
+        voice_mode=voice_mode,
+        voice_latency_budget_ms=voice_latency_budget_ms,
+    )
+
+
+def _primitive_needs_text_panel(primitive: Primitive) -> bool:
+    return primitive in {Primitive.verbal_whiteboard}

@@ -2,35 +2,48 @@ name: ds-ml-engineer
 version: 1
 role: "Data Scientist / ML Engineer"
 description: >
-  MVP rubric. Four dimensions. Weights sum to 1.0.
+  Voice rubric. Six dimensions. Weights sum to 1.0.
   Weights are loaded only by the Aggregator — never exposed to agents.
 
 dimensions:
   - name: problem_framing
-    weight: 0.25
+    weight: 0.18
     description: >
       Can the candidate translate the ambiguous business prompt into a concrete,
       measurable data science task — naming the target, the unit of analysis,
       and the success metric?
 
   - name: model_rationale
-    weight: 0.30
+    weight: 0.22
     description: >
       Does the candidate justify their modeling and feature choices against the
       data and the stakeholder's decision? Trade-offs named; simple-first tried
       or explicitly ruled out.
 
+  - name: experiment_design
+    weight: 0.15
+    description: >
+      Can the candidate describe an execution plan that would actually test the
+      hypothesis: validation strategy, failure modes, and operational trade-offs?
+
   - name: insight_interpretation
-    weight: 0.20
+    weight: 0.15
     description: >
       Do the candidate's stated conclusions correctly match what their model
       and charts actually show? Claims anchored in outputs, not in hope.
 
   - name: communication
-    weight: 0.25
+    weight: 0.18
     description: >
       Can a non-technical stakeholder read the candidate's summary and know
       what to do? Recommendation led; jargon glossed; uncertainty named.
+
+  - name: response_authenticity
+    weight: 0.12
+    description: >
+      Does the spoken response pattern look self-generated rather than coached:
+      healthy timing variance, adaptive counterfactual reasoning, and concrete
+      resume-specific detail when challenged?
 
 aggregation:
   composite: weighted_mean        # over per-dimension signal means

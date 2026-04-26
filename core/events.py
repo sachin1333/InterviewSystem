@@ -136,6 +136,7 @@ class SpeechFinalized(_Evt):
     first_partial_ms: int = Field(ge=0)  # time-to-first-partial-transcript
     final_ms: int = Field(ge=0)          # total speech duration
     filler_count: int = Field(ge=0)      # "um", "uh" tally — feeds authenticity scorer
+    degraded: bool = False
 
 
 class AudioChunkAttached(_Evt):

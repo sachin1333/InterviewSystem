@@ -15,6 +15,7 @@ class FallbackChainTts:
     def __init__(self, primary: Tts, fallback: Tts) -> None:
         self.primary = primary
         self.fallback = fallback
+        self._events: list[str] = []
 
     async def synthesize(
         self,
@@ -38,8 +39,14 @@ class FallbackChainTts:
         except (TtsTimeout, TtsAllFailed):
             pass
         # Try fallback.
+        self._events.append("tier_fallback")
         try:
             async for chunk in self.fallback.synthesize(_iter(buffered), voice_id=voice_id):
                 yield chunk
         except (TtsTimeout, TtsAllFailed) as exc:
             raise TtsAllFailed("primary and fallback TTS providers both failed") from exc
+
+    def consume_events(self) -> tuple[str, ...]:
+        events = tuple(self._events)
+        self._events.clear()
+        return events

@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import os
 import re
-import textwrap
 import tempfile
+import textwrap
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -29,9 +29,9 @@ from adapters.llm.fake_router import FakeRouter
 from adapters.llm.router import ModelRouter
 from adapters.scorer.aggregator import RubricAggregator
 from adapters.scorer.llm_communication_scorer import LlmCommunicationScorer
+from adapters.scorer.llm_insight_interp_scorer import LlmInsightInterpScorer
 from adapters.scorer.llm_problem_framing_scorer import LlmProblemFramingScorer
 from adapters.scorer.llm_rationale_scorer import LlmRationaleScorer
-from adapters.scorer.llm_insight_interp_scorer import LlmInsightInterpScorer
 from core.domain import Dimension
 from core.rubric_loader import load_rubric
 
@@ -172,7 +172,7 @@ def demo() -> None:
             # Extract per-dimension scores
             dim_matches = re.findall(r'<li>([^:]+): ([\d.]+)</li>', resp.text)
             if dim_matches:
-                print(f"    Per-Dimension Scores:")
+                print("    Per-Dimension Scores:")
                 for dim, score in dim_matches:
                     print(f"      - {dim}: {float(score):.2f}")
         else:
@@ -183,7 +183,7 @@ def demo() -> None:
         # Look for feedback file
         feedback_files = list(output_dir.glob(f"{session_id}_feedback.md"))
         if feedback_files:
-            print(f"[9] Read feedback markdown")
+            print("[9] Read feedback markdown")
             feedback_text = feedback_files[0].read_text()
             print()
             print("=" * 80)

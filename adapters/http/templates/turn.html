@@ -59,7 +59,7 @@
   </style>
 </head>
 <body>
-  <div class="app">
+  <div class="app" data-voice-enabled="{{ 'true' if voice_mode else 'false' }}">
     <div class="header">
       <h1>Interview</h1>
       <span class="meta">{{ turn_kind }} · {{ session_id }}</span>
@@ -97,10 +97,21 @@
       </form>
     </details>
 
-    <div id="voice-bar" class="voice-bar" data-voice-mode="{{ 'on' if voice_mode else 'off' }}">
+    <div
+      id="voice-bar"
+      class="voice-bar"
+      data-voice-mode="{{ 'on' if voice_mode else 'off' }}"
+      data-voice-policy="{{ voice_mode_setting }}"
+      data-allow-text-switch="{{ 'true' if allow_text_switch else 'false' }}"
+    >
       <div id="voice-status" class="voice-status status-idle">Idle</div>
       <div id="voice-transcript" class="voice-transcript"></div>
-      <button type="button" id="voice-switch-btn" class="voice-switch-btn">Switch to typing</button>
+      <button
+        type="button"
+        id="voice-switch-btn"
+        class="voice-switch-btn"
+        {% if not allow_text_switch %}hidden{% endif %}
+      >Switch to typing</button>
     </div>
   </div>
 

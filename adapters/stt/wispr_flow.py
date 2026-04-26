@@ -35,7 +35,7 @@ class WisprFlowStt:
         if not self.api_key:
             raise SttConnectionError("WISPR_API_KEY not set")
         try:
-            import websockets  # type: ignore[import-not-found]
+            import websockets
         except ImportError as exc:  # pragma: no cover
             raise SttConnectionError("websockets package required for WisprFlowStt") from exc
 

@@ -31,6 +31,7 @@ class Dimension(StrEnum):
     experiment_design = "experiment_design"
     insight_interp = "insight_interp"
     communication = "communication"
+    response_authenticity = "response_authenticity"
 
 
 class ArtifactKind(StrEnum):
