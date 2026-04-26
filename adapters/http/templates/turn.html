@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>Interview — session {{ session_id }}</title>
+  <link rel="stylesheet" href="/static/voice.css">
   <style>
     :root {
       --bg: #f7f7f8;
@@ -78,21 +79,29 @@
       {% endfor %}
     </div>
 
-    <form class="composer" method="post" action="/sessions/{{ session_id }}/turn" id="composer">
-      <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
-      <div class="row">
-        <textarea id="answer" name="answer" rows="2" autofocus
-          placeholder="{% if turn_kind == 'defense' %}Respond to the follow-up…{% else %}Type your answer…{% endif %}"></textarea>
-        <button type="submit">Send</button>
-      </div>
-      <button type="button" class="code-toggle" onclick="document.getElementById('code-wrap').classList.toggle('open')">
-        + add code
-      </button>
-      <div class="code-area" id="code-wrap">
-        <textarea id="code" name="code" rows="6"
-          placeholder="# Optional Python code (will be executed)"></textarea>
-      </div>
-    </form>
+    <details data-mode="text" {% if not voice_mode %}open{% endif %}>
+      <form class="composer" method="post" action="/sessions/{{ session_id }}/turn" id="composer">
+        <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
+        <div class="row">
+          <textarea id="answer" name="answer" rows="2" autofocus
+            placeholder="{% if turn_kind == 'defense' %}Respond to the follow-up…{% else %}Type your answer…{% endif %}"></textarea>
+          <button type="submit">Send</button>
+        </div>
+        <button type="button" class="code-toggle" onclick="document.getElementById('code-wrap').classList.toggle('open')">
+          + add code
+        </button>
+        <div class="code-area" id="code-wrap">
+          <textarea id="code" name="code" rows="6"
+            placeholder="# Optional Python code (will be executed)"></textarea>
+        </div>
+      </form>
+    </details>
+
+    <div id="voice-bar" class="voice-bar" data-voice-mode="{{ 'on' if voice_mode else 'off' }}">
+      <div id="voice-status" class="voice-status status-idle">Idle</div>
+      <div id="voice-transcript" class="voice-transcript"></div>
+      <button type="button" id="voice-switch-btn" class="voice-switch-btn">Switch to typing</button>
+    </div>
   </div>
 
   <script>
@@ -116,5 +125,8 @@
       answer.style.height = Math.min(answer.scrollHeight, 220) + 'px';
     });
   </script>
+
+  <script>window.SESSION_ID = "{{ session_id }}";</script>
+  <script src="/static/voice.js" defer></script>
 </body>
 </html>

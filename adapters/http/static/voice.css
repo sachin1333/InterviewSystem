@@ -1,0 +1,121 @@
+/* Voice interface styles */
+
+.voice-bar {
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+  padding: 0.8rem 1rem;
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+}
+
+.voice-bar[data-voice-mode="off"] {
+  display: none;
+}
+
+.voice-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.4rem;
+  letter-spacing: 0.03em;
+  min-width: 70px;
+  text-align: center;
+}
+
+.voice-status.status-idle {
+  background: #e8f0fe;
+  color: #1967d2;
+}
+
+.voice-status.status-listening {
+  background: #fce8e6;
+  color: #d33b27;
+  animation: pulse-listening 1s infinite;
+}
+
+.voice-status.status-speaking {
+  background: #e6f4ea;
+  color: #137333;
+  animation: pulse-speaking 1.5s infinite;
+}
+
+.voice-status.status-error {
+  background: #fce8e6;
+  color: #d33b27;
+}
+
+@keyframes pulse-listening {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes pulse-speaking {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.voice-transcript {
+  flex: 1;
+  font-style: italic;
+  color: var(--muted);
+  padding: 0.5rem 0.8rem;
+  border-radius: 0.7rem;
+  background: #f0f0f0;
+  min-height: 2rem;
+  display: flex;
+  align-items: center;
+  font-size: 0.95rem;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.voice-transcript:empty::before {
+  content: "Listening…";
+  color: var(--muted);
+}
+
+.voice-switch-btn {
+  background: #f3f3f3;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.voice-switch-btn:hover {
+  background: #e8e8e8;
+  border-color: var(--text);
+}
+
+.voice-switch-btn:active {
+  transform: scale(0.98);
+}
+
+/* When in voice mode, hide the text composer unless details[open] */
+details[data-mode="text"]:not([open]) ~ .voice-bar {
+  display: flex;
+}
+
+details[data-mode="text"]:not([open]) ~ .composer {
+  display: none;
+}
+
+details[data-mode="text"][open] ~ .voice-bar {
+  display: none;
+}
+
+/* Keep voice-bar visible and composer hidden when voice mode is active and details are closed */
+.app[data-voice-enabled="true"] details[data-mode="text"]:not([open]) ~ .composer {
+  display: none;
+}
+
+.app[data-voice-enabled="true"] details[data-mode="text"][open] ~ .composer {
+  display: flex;
+}

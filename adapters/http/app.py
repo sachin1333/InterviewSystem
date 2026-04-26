@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from adapters.eventlog.sqlite_log import SqliteEventLog
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from adapters.http.voice_runner import VoiceRunner
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _conversation_messages(session_id: str, log: EventLog) -> list[dict[str, str]]:
@@ -84,6 +86,9 @@ def make_app(
     """
     app = FastAPI(title="Interview System")
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+    # Mount static files for voice.js and voice.css
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     # Store config on app.state so route handlers can read it.
     app.state.log = log
@@ -155,6 +160,7 @@ def make_app(
             "messages": messages,
             "turn_kind": turn_kind,
             "turn_nonce": uuid.uuid4().hex,
+            "voice_mode": False,
         })
 
     # ------------------------------------------------------------------ #
