@@ -1,0 +1,33 @@
+version: "1.0"
+name: "Five-Stage DS/ML Case"
+total_duration_min: 18
+stages:
+  - id: problem_framing
+    primitive: think_aloud
+    duration_s: 120
+    prompt_seed: "Restate the business problem and break it into 3 subproblems."
+    on_complete: methodology
+
+  - id: methodology
+    primitive: socratic_rebuttal
+    duration_s: 75
+    prompt_seed: "Defend your model choice. What would break it?"
+    on_complete: execution
+
+  - id: execution
+    primitive: verbal_whiteboard
+    duration_s: 150
+    prompt_seed: "Walk through your validation strategy step by step."
+    on_complete: interpretation
+
+  - id: interpretation
+    primitive: counterfactual
+    duration_s: 60
+    prompt_seed: "Assume precision drops 20%. What does that signal?"
+    on_complete: synthesis
+
+  - id: synthesis
+    primitive: one_bullet
+    duration_s: 25
+    prompt_seed: "One sentence — explain this to a non-technical exec."
+    on_complete: end
