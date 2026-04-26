@@ -120,6 +120,42 @@ class ScorerFailed(_Evt):
     reason: str
 
 
+# --- voice / speech lifecycle --------------------------------------------
+
+class SpeechStarted(_Evt):
+    """Candidate began speaking; VAD onset."""
+    turn_id: str
+    started_at_ms: int = Field(ge=0)
+
+
+class SpeechFinalized(_Evt):
+    """Candidate finished speaking; STT final result available."""
+    turn_id: str
+    transcript: str
+    wpm: int = Field(ge=0)
+    first_partial_ms: int = Field(ge=0)  # time-to-first-partial-transcript
+    final_ms: int = Field(ge=0)          # total speech duration
+    filler_count: int = Field(ge=0)      # "um", "uh" tally — feeds authenticity scorer
+
+
+class AudioChunkAttached(_Evt):
+    """Pointer to the persisted audio blob for a turn (artifact_ref pattern)."""
+    turn_id: str
+    artifact_id: str
+    duration_ms: int = Field(ge=0)
+    bytes: int = Field(ge=0)
+
+
+class LatencyObserved(_Evt):
+    """Turn-level latency record for cheating-defense + ops dashboard."""
+    turn_id: str
+    stt_first_partial_ms: int = Field(ge=0)
+    stt_final_ms: int = Field(ge=0)
+    llm_ttft_ms: int = Field(ge=0)
+    tts_first_byte_ms: int = Field(ge=0)
+    end_to_end_ms: int = Field(ge=0)
+
+
 # --- candidate behavior / pacing -----------------------------------------
 
 class CandidateIdle(_Evt):
@@ -165,6 +201,8 @@ EVENT_TYPES: set[type] = {
     SignalEmitted, ScoreComputed,
     # adapter failures
     ChallengerFailed, ExaminerFailed, ScorerFailed,
+    # voice
+    SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved,
     # pacing
     CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
     # intake / override

@@ -20,6 +20,9 @@ class TurnKind(StrEnum):
     probe = "probe"
     defense = "defense"
     submit = "submit"
+    spoken_question = "spoken_question"
+    spoken_answer = "spoken_answer"
+    spoken_probe = "spoken_probe"
 
 
 class Dimension(StrEnum):
@@ -38,6 +41,7 @@ class ArtifactKind(StrEnum):
     chart_png = "chart_png"
     chat = "chat"
     audio_ref = "audio_ref"
+    transcript = "transcript"
 
 
 class _Frozen(BaseModel):

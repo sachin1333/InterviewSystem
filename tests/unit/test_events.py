@@ -7,6 +7,7 @@ from core.domain import Dimension
 from core.events import (
     EVENT_TYPES,
     ArtifactAttached,
+    AudioChunkAttached,
     BackchannelPosted,
     BreakDue,
     BudgetExceeded,
@@ -17,6 +18,7 @@ from core.events import (
     ExaminerFailed,
     HumanOverride,
     IdleThresholdCrossed,
+    LatencyObserved,
     ProfileIngested,
     RuntimeExecuted,
     RuntimeFailed,
@@ -27,6 +29,8 @@ from core.events import (
     SessionStarted,
     SessionTimedOut,
     SignalEmitted,
+    SpeechFinalized,
+    SpeechStarted,
     TierFallback,
     TurnPosted,
     TurnRequested,
@@ -108,6 +112,8 @@ def test_event_types_registry_covers_all_payloads():
         SignalEmitted, ScoreComputed,
         # adapter failures
         ChallengerFailed, ExaminerFailed, ScorerFailed,
+        # voice
+        SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved,
         # pacing
         CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
         # intake / override
