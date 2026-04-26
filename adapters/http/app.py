@@ -9,22 +9,36 @@ Candidate flow:
 """
 from __future__ import annotations
 
+import asyncio
+import base64
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from adapters.eventlog.sqlite_log import SqliteEventLog
 from adapters.http.session_runner import SessionRunner
+from adapters.http.voice_protocol import (
+    ClientAudioChunk,
+    ClientModeSwitch,
+    ServerPartialTranscript,
+    ServerStageChange,
+    ServerTtsChunk,
+)
 from core.contracts import EventLog
 from core.domain import Actor, ArtifactKind, TurnKind
 from core.events import ArtifactAttached, CandidateJoined, Envelope, SessionStarted, TurnPosted
 from core.pack_loader import PackRegistry
+from core.primitives import PRIMITIVE_REGISTRY
 from core.session_boot import replay
+
+if TYPE_CHECKING:
+    from adapters.http.voice_runner import VoiceRunner
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -61,6 +75,7 @@ def make_app(
     rubric_version: str = "ds-ml-engineer@1",
     output_dir: Path | str | None = None,
     pack_registry: PackRegistry | None = None,
+    voice_runner: VoiceRunner | None = None,
 ) -> FastAPI:
     """Return a configured FastAPI application.
 
@@ -77,6 +92,7 @@ def make_app(
     app.state.max_probes = max_probes
     app.state.rubric_version = rubric_version
     app.state.pack_registry = pack_registry or PackRegistry()
+    app.state.voice_runner = voice_runner
 
     # ------------------------------------------------------------------ #
     #  Start page                                                          #
@@ -251,6 +267,152 @@ def make_app(
             "score": score,
             "feedback_md": feedback_md,
         })
+
+    # ------------------------------------------------------------------ #
+    #  WebSocket voice interview                                          #
+    # ------------------------------------------------------------------ #
+
+    @app.websocket("/ws/sessions/{session_id}/voice")
+    async def voice_websocket(websocket: WebSocket, session_id: str) -> None:
+        """Bidirectional voice interview over WebSocket.
+
+        Protocol:
+          1. Client connects with session_id
+          2. Client sends audio_chunk messages with PCM audio
+          3. Server streams back partial_transcript, tts_chunk, stage_change
+          4. Client can send mode_switch to escape to text mode (closes WS)
+
+        Auth: For now, we accept any session_id (real auth deferred).
+        """
+        voice_runner: VoiceRunner | None = app.state.voice_runner
+
+        if voice_runner is None:
+            await websocket.close(code=1011, reason="voice not configured")
+            return
+
+        _log: EventLog = app.state.log
+
+        # Check that session exists (last_seq != None).
+        if _log.last_seq(session_id) is None:
+            await websocket.close(code=1008, reason="session not found")
+            return
+
+        await websocket.accept()
+
+        # Queue to bridge sync WS recv loop → async iterator.
+        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+        async def _audio_iterator():
+            """Async iterator over queued audio bytes. Stops at None sentinel."""
+            while True:
+                chunk = await audio_queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+
+        # Background task to read WS messages and feed the queue.
+        async def _read_messages() -> None:
+            try:
+                while True:
+                    data = await websocket.receive_json()
+                    msg_type = data.get("type")
+
+                    if msg_type == "audio_chunk":
+                        msg: ClientAudioChunk = data  # type: ignore
+                        if msg["seq"] == -1:
+                            # End-of-stream sentinel
+                            await audio_queue.put(None)
+                            break
+                        else:
+                            # Decode base64 PCM
+                            pcm_bytes = base64.b64decode(msg["pcm_b64"])
+                            await audio_queue.put(pcm_bytes)
+
+                    elif msg_type == "mode_switch":
+                        msg: ClientModeSwitch = data  # type: ignore
+                        if msg["mode"] == "text":
+                            # Close the voice channel gracefully.
+                            await audio_queue.put(None)
+                            await websocket.close(code=1000, reason="switched to text mode")
+                            return
+            except WebSocketDisconnect:
+                # Client disconnected. Signal audio iterator to stop.
+                await audio_queue.put(None)
+            except Exception:
+                # On any error, close the queue and let next_turn handle it.
+                await audio_queue.put(None)
+
+        # Start reading messages in background.
+        read_task = asyncio.create_task(_read_messages())
+
+        try:
+            # Run the voice turn.
+            result = await voice_runner.next_turn(
+                session_id,
+                candidate_audio=_audio_iterator(),
+                sample_rate_hz=16000,
+            )
+
+            # Send transcript first.
+            transcript_msg: ServerPartialTranscript = {
+                "type": "partial_transcript",
+                "text": result.transcript,
+                "is_final": True,
+            }
+            await websocket.send_json(transcript_msg)
+
+            # Stream TTS audio chunks.
+            first_chunk = True
+            async for audio_chunk in result.audio_stream:
+                tts_msg: ServerTtsChunk = {
+                    "type": "tts_chunk",
+                    "pcm_b64": base64.b64encode(audio_chunk).decode(),
+                    "end_of_utterance": False,
+                }
+                await websocket.send_json(tts_msg)
+                first_chunk = False
+
+            # Send final tts_chunk marker.
+            if not first_chunk:
+                tts_msg = {
+                    "type": "tts_chunk",
+                    "pcm_b64": "",
+                    "end_of_utterance": True,
+                }
+                await websocket.send_json(tts_msg)
+
+            # Determine show_text_panel based on primitive's cheating_defense flag.
+            next_stage = result.case_stage
+            next_case = voice_runner.case
+            next_stage_obj = next((s for s in next_case.stages if s.id == next_stage), None)
+            if next_stage_obj:
+                primitive_spec = PRIMITIVE_REGISTRY.get(next_stage_obj.primitive)
+                show_text_panel = primitive_spec.cheating_defense if primitive_spec else True
+            else:
+                show_text_panel = True
+
+            # Send stage change.
+            stage_msg: ServerStageChange = {
+                "type": "stage_change",
+                "case_stage": result.case_stage,
+                "primitive": next_stage_obj.primitive.value if next_stage_obj else "",
+                "show_text_panel": show_text_panel,
+            }
+            await websocket.send_json(stage_msg)
+
+            # WS closes normally.
+            await websocket.close(code=1000)
+
+        except Exception as e:
+            # Log error and close.
+            print(f"Error in voice_websocket: {e}")
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011, reason="server error")
+        finally:
+            # Ensure read task is cancelled.
+            read_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await read_task
 
     return app
 
