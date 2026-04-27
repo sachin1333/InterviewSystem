@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from core.case_loader import CaseStage
 from core.contracts import EventLog
 from core.events import Envelope, SessionResumed
 from core.projections import (
@@ -96,7 +97,7 @@ def replay_with_stages(
     session_id: str,
     log: EventLog,
     *,
-    stage_sequence: tuple[object, ...] = (),
+    stage_sequence: tuple[CaseStage, ...] = (),
 ) -> tuple[SessionStore, ScoreStore, SignalStore, RuntimeStore, ArtifactStore, StageStore]:
     """Like :func:`replay` but also populates a :class:`StageStore`.
 

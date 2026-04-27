@@ -1,16 +1,16 @@
 from pathlib import Path
 
+from core.case_bank import CaseBank
 from fastapi.testclient import TestClient
 
+from adapters.challenger.llm_challenger import LlmChallenger
 from adapters.eventlog.sqlite_log import SqliteEventLog
+from adapters.examiner.llm_examiner import LlmExaminer
 from adapters.http.app import make_app
 from adapters.http.session_runner import SessionRunner
-from adapters.scorer.aggregator import RubricAggregator
-from adapters.challenger.llm_challenger import LlmChallenger
-from adapters.examiner.llm_examiner import LlmExaminer
 from adapters.llm.fake_router import FakeRouter
 from adapters.llm.router import ModelRouter
-from core.case_bank import CaseBank
+from adapters.scorer.aggregator import RubricAggregator
 
 
 def test_probe_sse_streams_tokens(tmp_path: Path) -> None:

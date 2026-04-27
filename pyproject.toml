@@ -21,7 +21,7 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["core", "adapters", "tools"]
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
   "pytest>=8",
   "pytest-cov>=5",

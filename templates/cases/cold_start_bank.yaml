@@ -1,0 +1,13 @@
+cases:
+  - body: |
+      Please analyze the following business problem: a SaaS company is seeing
+      rising churn among enterprise accounts. State your assumptions, outline
+      your analytical approach, and explain the trade-offs in your solution.
+  - body: |
+      You have been given a dataset with 12 months of user-engagement logs for
+      a mobile app. Walk through how you would identify the leading indicators
+      of retention versus churn, and describe the model you would build.
+  - body: |
+      A/B test results show a 5% lift in click-through rate but no change in
+      conversion. How do you interpret these results and what would you
+      recommend as the next step?
