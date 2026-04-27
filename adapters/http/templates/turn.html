@@ -59,10 +59,16 @@
   </style>
 </head>
 <body>
-  <div class="app" data-voice-enabled="{{ 'true' if voice_mode else 'false' }}">
+  <div class="app" data-voice-enabled="{{ 'true' if voice_mode else 'false' }}" data-active-mode="{{ active_mode }}">
     <div class="header">
       <h1>Interview</h1>
       <span class="meta">{{ turn_kind }} · {{ session_id }}</span>
+      {% if voice_mode and allow_text_switch %}
+      <div class="mode-toggle">
+        <button id="btn-use-voice" class="mode-btn{{ ' active' if active_mode == 'voice' else '' }}">🎤 Voice</button>
+        <button id="btn-use-text"  class="mode-btn{{ ' active' if active_mode == 'text'  else '' }}">⌨ Text</button>
+      </div>
+      {% endif %}
     </div>
 
     <div class="chat" id="chat">
@@ -101,7 +107,7 @@
       {% endif %}
     </div>
 
-    <details data-mode="text" {% if not voice_mode %}open{% endif %}>
+    <details data-mode="text" {% if active_mode == 'text' %}open{% endif %}>
       <form class="composer" method="post" action="/sessions/{{ session_id }}/turn" id="composer">
         <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
         <div class="row">
@@ -122,18 +128,17 @@
     <div
       id="voice-bar"
       class="voice-bar"
-      data-voice-mode="{{ 'on' if voice_mode else 'off' }}"
+      data-voice-mode="{{ 'on' if (voice_mode and active_mode == 'voice') else 'off' }}"
       data-voice-policy="{{ voice_mode_setting }}"
       data-allow-text-switch="{{ 'true' if allow_text_switch else 'false' }}"
     >
-      <div id="voice-status" class="voice-status status-idle">Idle</div>
-      <div id="voice-transcript" class="voice-transcript"></div>
       <button
         type="button"
-        id="voice-switch-btn"
-        class="voice-switch-btn"
-        {% if not allow_text_switch %}hidden{% endif %}
-      >Switch to typing</button>
+        id="mic-btn"
+        class="mic-btn"
+        data-mic="ptt"
+      >🎤 Hold to speak</button>
+      <div id="voice-transcript" class="voice-transcript"></div>
     </div>
   </div>
 

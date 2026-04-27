@@ -252,12 +252,10 @@ class VoiceInterface {
     this.ttsPlayer = null;
     this.audioSeq = 0;
     this.isSending = false;
-    this.vadTimer = null;
-    this.lastEnergyTime = Date.now();
-    this.minSilenceDuration = VOICE_CONFIG.SILENCE_DURATION_MS;
+    this.pressing = false;   // PTT: true while button held
     this.status = 'idle'; // idle, listening, speaking, error
     this.voiceMode = false;
-    this.bargingIn = false;
+    this.allowTextSwitch = false;
   }
 
   async initialize() {
@@ -271,58 +269,57 @@ class VoiceInterface {
       return;
     }
 
-    try {
-      await this.mic.start();
-      this.setupMicCallbacks();
-      this.connectWebSocket();
-      this.setStatus('idle');
-      console.log('Voice interface initialized');
-    } catch (err) {
-      console.error('Failed to initialize voice:', err);
-      this.setStatus('error');
-    }
+    // PTT: wire up hold-to-speak button; do NOT start mic here.
+    this._setupPTT();
+    console.log('Voice interface ready (PTT mode)');
   }
 
-  setupMicCallbacks() {
+  _setupPTT() {
+    const btn = document.getElementById('mic-btn');
+    if (!btn) return;
+
+    const startSpeaking = async () => {
+      if (this.pressing) return;
+      this.pressing = true;
+      this.audioSeq = 0;
+      btn.classList.add('pressed');
+      try {
+        await this.mic.start();
+        this._setupMicCallbacks();
+        this.connectWebSocket();
+        this.setStatus('listening');
+      } catch (err) {
+        console.error('Mic error:', err);
+        this.pressing = false;
+        btn.classList.remove('pressed');
+        this.setStatus('error');
+      }
+    };
+
+    const stopSpeaking = () => {
+      if (!this.pressing) return;
+      this.pressing = false;
+      btn.classList.remove('pressed');
+      this.sendEndOfStream();
+      this.mic.stop();
+      this.setStatus('idle');
+    };
+
+    btn.addEventListener('pointerdown', (e) => { e.preventDefault(); startSpeaking(); });
+    btn.addEventListener('pointerup',   () => stopSpeaking());
+    btn.addEventListener('pointercancel', () => stopSpeaking());
+    // Prevent context menu on long-press (mobile).
+    btn.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  _setupMicCallbacks() {
     this.mic.onAudioChunk = (int16Array) => {
-      this.lastEnergyTime = Date.now();
       if (!this.isSending) return;
-
       const b64 = this._int16ToBase64(int16Array);
-      const msg = {
-        type: 'audio_chunk',
-        seq: this.audioSeq++,
-        pcm_b64: b64,
-      };
-
-      this.send(msg);
-      this.setStatus('listening');
+      this.send({ type: 'audio_chunk', seq: this.audioSeq++, pcm_b64: b64 });
     };
-
-    this.mic.onEnergy = (rms) => {
-      if (!this.isSending) return;
-
-      // VAD: if audio is playing and mic energy exceeds threshold, barge in
-      if (this.ttsPlayer && this.ttsPlayer.isPlaying && rms > VOICE_CONFIG.VAD_THRESHOLD_RMS) {
-        if (!this.bargingIn) {
-          this.bargingIn = true;
-          console.log('Barge-in detected, stopping TTS');
-          this.ttsPlayer.stopAndClear();
-          this.ttsPlayer.isPlaying = false;
-        }
-      }
-
-      // Update silence timer
-      if (rms > VOICE_CONFIG.VAD_THRESHOLD_RMS) {
-        this.lastEnergyTime = Date.now();
-      } else {
-        const silenceDuration = Date.now() - this.lastEnergyTime;
-        if (silenceDuration > this.minSilenceDuration && this.isSending && !this.bargingIn) {
-          console.log('Silence detected, sending EOS');
-          this.sendEndOfStream();
-        }
-      }
-    };
+    // No VAD energy callback needed in PTT mode.
+    this.mic.onEnergy = null;
   }
 
   connectWebSocket() {
@@ -429,22 +426,24 @@ class VoiceInterface {
   switchToText() {
     if (!this.allowTextSwitch) return;
     console.log('Switching to text mode');
+    document.cookie = 'interview_mode=text; path=/';
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const msg = {
-        type: 'mode_switch',
-        mode: 'text',
-      };
-      this.send(msg);
+      this.send({ type: 'mode_switch', mode: 'text' });
     }
+    // Show text composer immediately (cookie persisted on next page load).
     const details = document.querySelector('details[data-mode="text"]');
-    if (details) {
-      details.open = true;
-    }
+    if (details) { details.open = true; }
     const textarea = document.getElementById('answer');
-    if (textarea) {
-      textarea.focus();
-      textarea.placeholder = 'Type your answer here';
-    }
+    if (textarea) { textarea.focus(); textarea.placeholder = 'Type your answer here'; }
+    // Hide voice bar.
+    const voiceBar = document.getElementById('voice-bar');
+    if (voiceBar) { voiceBar.setAttribute('data-voice-mode', 'off'); }
+  }
+
+  switchToVoice() {
+    console.log('Switching to voice mode');
+    document.cookie = 'interview_mode=voice; path=/';
+    window.location.reload();
   }
 
   send(msg) {
@@ -499,15 +498,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (voiceBar && voiceBar.getAttribute('data-voice-mode') === 'on') {
     voiceInterface = new VoiceInterface(window.SESSION_ID);
     await voiceInterface.initialize();
+  }
 
-    const switchButton = document.getElementById('voice-switch-btn');
-    if (switchButton) {
-      switchButton.addEventListener('click', () => {
-        if (voiceInterface) {
-          voiceInterface.switchToText();
-        }
-      });
-    }
+  // Mode-toggle buttons (present when allow_text_switch=true).
+  const btnVoice = document.getElementById('btn-use-voice');
+  const btnText  = document.getElementById('btn-use-text');
+  if (btnVoice) {
+    btnVoice.addEventListener('click', () => {
+      if (voiceInterface) voiceInterface.switchToVoice();
+      else { document.cookie = 'interview_mode=voice; path=/'; window.location.reload(); }
+    });
+  }
+  if (btnText) {
+    btnText.addEventListener('click', () => {
+      if (voiceInterface) voiceInterface.switchToText();
+      else { document.cookie = 'interview_mode=text; path=/'; window.location.reload(); }
+    });
   }
 });
 

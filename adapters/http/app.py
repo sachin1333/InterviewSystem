@@ -172,14 +172,24 @@ def make_app(
             result.turn_kind == TurnKind.defense
             and not _last_interviewer_has_text(messages)
         )
+
+        # Determine active input mode from cookie (voice sessions only).
+        voice_on = app.state.voice_mode != "off"
+        if voice_on:
+            raw_cookie = request.cookies.get("interview_mode", "voice")
+            active_mode = raw_cookie if raw_cookie in ("text", "voice") else "voice"
+        else:
+            active_mode = "text"
+
         return templates.TemplateResponse(request, "turn.html", {
             "session_id": session_id,
             "messages": messages,
             "turn_kind": turn_kind,
             "turn_nonce": uuid.uuid4().hex,
-            "voice_mode": app.state.voice_mode != "off",
+            "voice_mode": voice_on,
             "voice_mode_setting": app.state.voice_mode,
             "allow_text_switch": app.state.voice_mode == "on",
+            "active_mode": active_mode,
             "probe_pending": probe_pending,
         })
 
