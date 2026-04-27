@@ -77,6 +77,28 @@
           </div>
         </div>
       {% endfor %}
+      {% if probe_pending %}
+      <div class="msg interviewer" id="probe-streaming">
+        <div>
+          <div class="role">Interviewer</div>
+          <div class="bubble" id="probe-stream-text">…</div>
+        </div>
+      </div>
+      <script>
+      (() => {
+        const target = document.getElementById('probe-stream-text');
+        const es = new EventSource("/sessions/{{ session_id }}/probe-stream");
+        let buf = "";
+        es.onmessage = (e) => {
+          if (e.data === "[DONE]") { es.close(); return; }
+          buf += e.data;
+          target.textContent = buf;
+          document.getElementById('chat').scrollTop = 1e9;
+        };
+        es.addEventListener('done', () => es.close());
+      })();
+      </script>
+      {% endif %}
     </div>
 
     <details data-mode="text" {% if not voice_mode %}open{% endif %}>

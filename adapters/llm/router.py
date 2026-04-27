@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -163,6 +163,21 @@ class ModelRouter:
         total_ms = int((time.monotonic() - start) * 1000)
 
         return StreamingMetrics(text=first + rest, ttft_ms=ttft_ms, total_ms=total_ms)
+
+    def iter_streaming(self, *, tier: Tier, prompt: str) -> Iterator[str]:
+        """Yield token chunks as they arrive from the provider.
+
+        Unlike call_streaming_with_metrics this does not consume the iterator
+        internally — it forwards each chunk so HTTP/SSE handlers can flush.
+        """
+        iterator = self.call(tier=tier, prompt=prompt, stream=True)
+        if isinstance(iterator, str):
+            if iterator:
+                yield iterator
+            return
+        for chunk in iterator:
+            if chunk:
+                yield chunk
 
     def _get_timeout(self, tier: Tier) -> float:
         return {

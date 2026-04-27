@@ -46,6 +46,14 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _last_interviewer_has_text(messages: list[dict[str, str]]) -> bool:
+    """Return True if the most recent interviewer message contains non-empty text."""
+    for m in reversed(messages):
+        if m["role"] == "interviewer":
+            return bool(m["text"].strip())
+    return False
+
+
 def _conversation_messages(session_id: str, log: EventLog) -> list[dict[str, str]]:
     """Build an ordered list of {role, text} messages for the chat view."""
     sessions, _, _, _, artifacts = replay(session_id, log)
@@ -160,6 +168,10 @@ def make_app(
 
         turn_kind = (result.turn_kind or TurnKind.answer).value
         messages = _conversation_messages(session_id, _log)
+        probe_pending = (
+            result.turn_kind == TurnKind.defense
+            and not _last_interviewer_has_text(messages)
+        )
         return templates.TemplateResponse(request, "turn.html", {
             "session_id": session_id,
             "messages": messages,
@@ -168,6 +180,7 @@ def make_app(
             "voice_mode": app.state.voice_mode != "off",
             "voice_mode_setting": app.state.voice_mode,
             "allow_text_switch": app.state.voice_mode == "on",
+            "probe_pending": probe_pending,
         })
 
     # ------------------------------------------------------------------ #
@@ -430,6 +443,14 @@ def make_app(
             with contextlib.suppress(asyncio.CancelledError):
                 await read_task
 
+    # ------------------------------------------------------------------ #
+    #  SSE streaming probe endpoint                                       #
+    # ------------------------------------------------------------------ #
+
+    if runner.examiner is not None:
+        from adapters.http.sse_routes import make_sse_router
+        app.include_router(make_sse_router(log=log, examiner=runner.examiner))
+
     return app
 
 
@@ -459,6 +480,7 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     from adapters.tts.elevenlabs_flash import ElevenLabsFlashTts
     from adapters.tts.fake_tts import FakeTts
     from adapters.tts.fallback_chain import FallbackChainTts
+    from core.case_bank import CaseBank
     from core.domain import Dimension
 
     log = SqliteEventLog(db_path)
@@ -472,8 +494,11 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     aggregator = RubricAggregator.from_yaml(rubric_path, output_dir=output_dir)
     communication_scorer = LlmCommunicationScorer(router)
 
+    case_bank_path = _Path("templates") / "cases" / "cold_start_bank.yaml"
+    case_bank = CaseBank.from_yaml(case_bank_path) if case_bank_path.exists() else None
+
     runner = SessionRunner(
-        challenger=LlmChallenger(router),
+        challenger=LlmChallenger(router, case_bank=case_bank),
         scorers={
             Dimension.model_rationale: LlmRationaleScorer(router),
             Dimension.communication: communication_scorer,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +20,13 @@ class JsonModelRouter(Protocol):
         schema: set[str] | Mapping[str, object],
         deadline_ms: int | None = None,
     ) -> dict[str, Any]: ...
+
+    def iter_streaming(
+        self,
+        *,
+        tier: Literal["cheap", "mid", "top"],
+        prompt: str,
+    ) -> Iterator[str]: ...
 
 
 @dataclass(frozen=True)
@@ -70,6 +77,20 @@ class LlmExaminer(Examiner):
                 ExaminerFailed(reason=str(exc) or exc.__class__.__name__),
             )
         return outcome, None
+
+    def iter_review(
+        self,
+        session_id: str,
+        recent_turns: Sequence[Any],
+    ) -> Iterator[str]:
+        """Yield probe text token-by-token from the streaming examiner path.
+
+        Passes an empty turn list to _compose_prompt (TurnInfo dicts from
+        projections are not compatible with Turn domain objects).  The prompt
+        still carries the session_id for context.
+        """
+        prompt = self._compose_prompt(session_id, [], memory_text="")
+        yield from self.model_router.iter_streaming(tier="mid", prompt=prompt)
 
     def _compose_prompt(
         self,

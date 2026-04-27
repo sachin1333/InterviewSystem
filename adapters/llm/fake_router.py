@@ -23,6 +23,7 @@ class FakeRouter:
         latency: float = 0.0,
         scripted_responses: Mapping[str, Sequence[str]] | None = None,
         failure_modes: Mapping[str, str] | None = None,
+        scripted_streams: list[list[str]] | None = None,
     ) -> None:
         self.fail_mode = fail_mode
         self.latency = latency
@@ -32,6 +33,7 @@ class FakeRouter:
             for prompt_hash, responses in (scripted_responses or {}).items()
         }
         self._failure_modes = dict(failure_modes or {})
+        self._scripted_streams: list[list[str]] = list(scripted_streams or [])
 
     @staticmethod
     def prompt_hash(prompt: str) -> str:
@@ -81,6 +83,10 @@ class FakeRouter:
                     '"artifact_refs":[],'
                     '"soft_deadline_minutes":45}'
                 )
+
+        # scripted_streams take priority for streaming calls
+        if stream and self._scripted_streams:
+            return iter(self._scripted_streams.pop(0))
 
         if stream:
             return self._chunk(response)
