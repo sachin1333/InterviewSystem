@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from core.case_bank import CaseBank
 from core.contracts import Challenger
 
 
@@ -25,6 +26,7 @@ class LlmChallenger(Challenger):
         *,
         templates_root: str | Path | None = None,
         canned_prompts_path: str | Path | None = None,
+        case_bank: CaseBank | None = None,
     ) -> None:
         self.model_router = model_router
         self.templates_root = (
@@ -37,6 +39,7 @@ class LlmChallenger(Challenger):
             if canned_prompts_path is not None
             else Path("templates") / "rubrics" / "fixtures" / "canned_prompts.md"
         )
+        self.case_bank = case_bank
         self.inline_fallback_prompt = (
             "Please analyze the business problem, state your assumptions, and explain "
             "the trade-offs in your approach."
@@ -63,6 +66,13 @@ class LlmChallenger(Challenger):
         return prompt or self.inline_fallback_prompt
 
     def propose_prompts(self, session_id: str) -> Iterable[str]:
+        if self.case_bank is not None and len(self.case_bank) > 0:
+            try:
+                picked = self.case_bank.pick_for_session(session_id)
+                return [picked.body]
+            except Exception:
+                pass  # fall through to live LLM
+
         try:
             payload = self.model_router.call_json(
                 tier="top",

@@ -189,6 +189,15 @@ class HumanOverride(_Evt):
     reason: str
 
 
+class StageEntered(_Evt):
+    stage_id: str
+    primitive: str
+
+
+class StageCompleted(_Evt):
+    stage_id: str
+
+
 EVENT_TYPES: set[type] = {
     # lifecycle
     SessionStarted, CandidateJoined, SessionResumed, SessionEnded, SessionTimedOut,
@@ -208,6 +217,8 @@ EVENT_TYPES: set[type] = {
     CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
     # intake / override
     ProfileIngested, HumanOverride,
+    # case stages
+    StageEntered, StageCompleted,
 }
 
 

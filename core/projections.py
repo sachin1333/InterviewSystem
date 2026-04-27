@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TypedDict
 
+from core.case_loader import CaseStage
 from core.domain import Actor, ArtifactKind, Dimension, Score, TurnKind
 from core.events import (
     ArtifactAttached,
@@ -14,6 +15,8 @@ from core.events import (
     SessionEnded,
     SessionStarted,
     SignalEmitted,
+    StageCompleted,
+    StageEntered,
     TurnPosted,
 )
 
@@ -162,3 +165,75 @@ class ArtifactStore:
 
     def get(self, artifact_id: str) -> str | None:
         return self._content.get(artifact_id)
+
+
+class StageStore:
+    """Per-session case-stage tracker. Populated from StageEntered/StageCompleted events."""
+
+    def __init__(self, stages: tuple[CaseStage, ...] = ()) -> None:
+        self._stages = stages
+        self._current: dict[str, str] = {}         # session_id -> stage_id
+        self._completed: dict[str, set[str]] = {}  # session_id -> {stage_id, ...}
+
+    def apply_for_session(self, session_id: str, evt: object) -> None:
+        if isinstance(evt, StageEntered):
+            self._current[session_id] = evt.stage_id
+            self._completed.setdefault(session_id, set())
+        elif isinstance(evt, StageCompleted):
+            self._completed.setdefault(session_id, set()).add(evt.stage_id)
+
+    def apply(self, envelope: Envelope) -> None:
+        p = envelope.payload
+        if isinstance(p, (StageEntered, StageCompleted)):
+            self.apply_for_session(envelope.session_id, p)
+
+    def current_id(self, session_id: str) -> str | None:
+        return self._current.get(session_id)
+
+    def completed_ids(self, session_id: str) -> set[str]:
+        return set(self._completed.get(session_id, set()))
+
+    def current(self, session_id: str) -> CaseStage | None:
+        """Return the CaseStage for the current stage, or None."""
+        cur_id = self._current.get(session_id)
+        if cur_id is None:
+            return None
+        return next((s for s in self._stages if s.id == cur_id), None)
+
+    def next_after(self, session_id: str) -> CaseStage | None:
+        """Return the next incomplete CaseStage in sequence, or None if all done."""
+        if not self._stages:
+            return None
+        completed = self._completed.get(session_id, set())
+        by_id: dict[str, CaseStage] = {s.id: s for s in self._stages}
+        cur: CaseStage | None = self._stages[0]
+        seen: set[str] = set()
+        while cur is not None:
+            if cur.id in seen:
+                break
+            seen.add(cur.id)
+            if cur.id not in completed:
+                return cur
+            if cur.on_complete == "end":
+                break
+            cur = by_id.get(cur.on_complete)
+        return None
+
+    def all_stages_completed(self, session_id: str) -> bool:
+        """True if every stage in the sequence has a StageCompleted event."""
+        if not self._stages:
+            return True
+        completed = self._completed.get(session_id, set())
+        by_id: dict[str, CaseStage] = {s.id: s for s in self._stages}
+        cur: CaseStage | None = self._stages[0]
+        seen: set[str] = set()
+        while cur is not None:
+            if cur.id in seen:
+                break
+            seen.add(cur.id)
+            if cur.id not in completed:
+                return False
+            if cur.on_complete == "end":
+                break
+            cur = by_id.get(cur.on_complete)
+        return True

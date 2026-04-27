@@ -18,7 +18,14 @@ from datetime import UTC, datetime
 
 from core.contracts import EventLog
 from core.events import Envelope, SessionResumed
-from core.projections import ArtifactStore, RuntimeStore, ScoreStore, SessionStore, SignalStore
+from core.projections import (
+    ArtifactStore,
+    RuntimeStore,
+    ScoreStore,
+    SessionStore,
+    SignalStore,
+    StageStore,
+)
 
 
 def boot(
@@ -83,3 +90,32 @@ def replay(
         artifacts.apply(env)
 
     return sessions, scores, signals, runtimes, artifacts
+
+
+def replay_with_stages(
+    session_id: str,
+    log: EventLog,
+    *,
+    stage_sequence: tuple[object, ...] = (),
+) -> tuple[SessionStore, ScoreStore, SignalStore, RuntimeStore, ArtifactStore, StageStore]:
+    """Like :func:`replay` but also populates a :class:`StageStore`.
+
+    Pass ``stage_sequence`` (a tuple of CaseStage) to enable stage navigation;
+    omit it for a bare store that only tracks IDs.
+    """
+    sessions = SessionStore()
+    scores = ScoreStore()
+    signals = SignalStore()
+    runtimes = RuntimeStore()
+    artifacts = ArtifactStore()
+    stages = StageStore(stage_sequence)
+
+    for env in log.get_session(session_id):
+        sessions.apply(env)
+        scores.apply(env)
+        signals.apply(env)
+        runtimes.apply(env)
+        artifacts.apply(env)
+        stages.apply(env)
+
+    return sessions, scores, signals, runtimes, artifacts, stages

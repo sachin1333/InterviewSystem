@@ -14,6 +14,7 @@ from adapters.challenger.llm_challenger import LlmChallenger
 from adapters.examiner.llm_examiner import LlmExaminer
 from adapters.scorer._base import BaseLlmScorer
 from adapters.scorer.aggregator import RubricAggregator
+from core.case_loader import CaseDefinition, CaseStage
 from core.contracts import EventLog
 from core.domain import Actor, Artifact, ArtifactKind, Dimension, Signal, TurnKind
 from core.events import (
@@ -24,6 +25,8 @@ from core.events import (
     ScorerFailed,
     SessionEnded,
     SignalEmitted,
+    StageCompleted,
+    StageEntered,
     TurnPosted,
 )
 from core.orchestrator import (
@@ -39,7 +42,7 @@ from core.orchestrator import (
     next_action,
 )
 from core.projections import ArtifactStore, SessionStore
-from core.session_boot import replay
+from core.session_boot import replay_with_stages
 
 _MAX_STEPS = 100
 
@@ -64,6 +67,7 @@ class SessionRunner:
     scorers: dict[Dimension, BaseLlmScorer] = field(default_factory=dict)
     scored_dimensions: tuple[Dimension, ...] = DEFAULT_SCORED_DIMENSIONS
     execution_timeout: float = 10.0
+    case: CaseDefinition | None = None  # when set, drives multi-stage Socratic flow
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -71,8 +75,48 @@ class SessionRunner:
 
     def advance(self, session_id: str, log: EventLog) -> RunResult:
         """Step the FSM until `RequestCandidateInput`, `EndSession`, or `NoAction`."""
+        stage_seq = self.case.stages if self.case is not None else ()
         for _ in range(_MAX_STEPS):
-            sessions, scores, signals, runtimes, artifacts = replay(session_id, log)
+            sessions, scores, signals, runtimes, artifacts, stages = replay_with_stages(
+                session_id, log, stage_sequence=stage_seq
+            )
+
+            # ── Multi-stage: check if we should complete the current stage ──
+            if self.case is not None:
+                cur_id = stages.current_id(session_id)
+                if cur_id is not None and cur_id not in stages.completed_ids(session_id):
+                    # Count candidate answers since StageEntered for cur_id
+                    s = sessions.get(session_id)
+                    if s is not None:
+                        stage_entered_seq = next(
+                            (
+                                env.seq
+                                for env in log.get_session(session_id)
+                                if getattr(env.payload, "stage_id", None) == cur_id
+                                and isinstance(env.payload, StageEntered)
+                            ),
+                            0,
+                        )
+                        answers_since = sum(
+                            1
+                            for t in s["turns"]
+                            if t["actor"] == Actor.candidate
+                            and t["seq"] > stage_entered_seq
+                        )
+                        if answers_since >= 1:
+                            self._append(session_id, log, StageCompleted(stage_id=cur_id))
+                            continue
+
+                # If there are uncompleted stages and no current stage, start next one
+                if not stages.all_stages_completed(session_id):
+                    next_stage_obj = stages.next_after(session_id)
+                    if next_stage_obj is not None:
+                        cur = stages.current_id(session_id)
+                        if cur is None or cur in stages.completed_ids(session_id):
+                            # Fire the next stage's challenge
+                            self._do_stage_challenge(session_id, log, next_stage_obj)
+                            continue
+
             action = next_action(
                 session_id, sessions, scores, signals, runtimes,
                 scored_dimensions=self.scored_dimensions,
@@ -97,7 +141,12 @@ class SessionRunner:
                 return RunResult(state="no_op", session_id=session_id)
 
             if isinstance(action, RequestChallenge):
-                self._do_challenge(session_id, log)
+                if self.case is not None:
+                    # In multi-stage mode, challenge is handled by _do_stage_challenge above.
+                    # This branch is only reached when all stages are complete — skip.
+                    pass
+                else:
+                    self._do_challenge(session_id, log)
 
             elif isinstance(action, RequestProbe):
                 self._do_probe(session_id, log)
@@ -144,6 +193,38 @@ class SessionRunner:
         prompt_text = prompts[0] if prompts else "(no question generated)"
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
         artifact_id = f"a-{uuid.uuid4().hex[:8]}"
+        self._append(session_id, log, TurnPosted(id=turn_id, actor=Actor.challenger, kind=TurnKind.question))
+        self._append(session_id, log, ArtifactAttached(
+            id=artifact_id,
+            kind=ArtifactKind.prompt,
+            produced_by_turn_id=turn_id,
+            version=1,
+            content=prompt_text,
+        ))
+
+    def _do_stage_challenge(self, session_id: str, log: EventLog, stage: CaseStage) -> None:
+        """Issue a challenger turn for the given CaseStage and mark it as entered."""
+        stage_id: str = stage.id
+        primitive_val: str = stage.primitive.value
+        prompt_seed: str = stage.prompt_seed
+
+        # First stage uses the case_bank if available; subsequent stages use prompt_seed.
+        if (
+            self.case is not None
+            and self.case.stages
+            and stage_id == self.case.stages[0].id
+            and self.challenger.case_bank is not None
+        ):
+            prompt_text = self.challenger.case_bank.pick_for_session(session_id).body
+        elif prompt_seed:
+            prompt_text = prompt_seed
+        else:
+            prompts = list(self.challenger.propose_prompts(session_id))
+            prompt_text = prompts[0] if prompts else "(no question generated)"
+
+        turn_id = f"t-{uuid.uuid4().hex[:8]}"
+        artifact_id = f"a-{uuid.uuid4().hex[:8]}"
+        self._append(session_id, log, StageEntered(stage_id=stage_id, primitive=primitive_val))
         self._append(session_id, log, TurnPosted(id=turn_id, actor=Actor.challenger, kind=TurnKind.question))
         self._append(session_id, log, ArtifactAttached(
             id=artifact_id,

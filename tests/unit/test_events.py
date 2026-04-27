@@ -31,6 +31,8 @@ from core.events import (
     SignalEmitted,
     SpeechFinalized,
     SpeechStarted,
+    StageCompleted,
+    StageEntered,
     TierFallback,
     TurnPosted,
     TurnRequested,
@@ -118,6 +120,8 @@ def test_event_types_registry_covers_all_payloads():
         CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
         # intake / override
         ProfileIngested, HumanOverride,
+        # case stages
+        StageEntered, StageCompleted,
     }
     assert expected == EVENT_TYPES
 
