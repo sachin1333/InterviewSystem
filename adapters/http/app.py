@@ -476,8 +476,6 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     from dotenv import load_dotenv
     load_dotenv(dotenv_path=_Path(__file__).parent.parent.parent / ".env", override=False)
 
-    from core.case_bank import CaseBank
-
     from adapters.challenger.llm_challenger import LlmChallenger
     from adapters.http.voice_runner import VoiceRunner
     from adapters.llm.factory import get_model_router
@@ -492,6 +490,7 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     from adapters.tts.elevenlabs_flash import ElevenLabsFlashTts
     from adapters.tts.fake_tts import FakeTts
     from adapters.tts.fallback_chain import FallbackChainTts
+    from core.case_bank import CaseBank
     from core.domain import Dimension
 
     log = SqliteEventLog(db_path)

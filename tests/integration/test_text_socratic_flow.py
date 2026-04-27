@@ -1,7 +1,6 @@
 """Integration test: 5-stage Socratic text-mode chat flow."""
 from pathlib import Path
 
-from core.case_bank import CaseBank
 from fastapi.testclient import TestClient
 
 from adapters.challenger.llm_challenger import LlmChallenger
@@ -12,6 +11,7 @@ from adapters.http.session_runner import SessionRunner
 from adapters.llm.fake_router import FakeRouter
 from adapters.llm.router import ModelRouter
 from adapters.scorer.aggregator import RubricAggregator
+from core.case_bank import CaseBank
 from core.case_loader import load_case
 
 

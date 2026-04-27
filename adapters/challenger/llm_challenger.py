@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from core.case_bank import CaseBank
-
 from core.contracts import Challenger
 
 
