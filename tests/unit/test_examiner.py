@@ -1,8 +1,14 @@
+"""Unit tests for LlmExaminer — Phase 2.2 schema.
+
+Examiner now returns probe-or-close JSON:
+  {"action": "probe"|"close", "text"?: str, "reason"?: str,
+   "rationale": str, "primitive_hint"?: str}
+"""
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from adapters.examiner.llm_examiner import LlmExaminer
+from adapters.examiner.llm_examiner import CoverageContext, LlmExaminer
 from adapters.llm.router import ModelRouter
 from core.domain import Actor, Turn, TurnKind
 
@@ -47,10 +53,14 @@ def _turn() -> Turn:
     )
 
 
+# ------------------------------------------------------------------ #
+#  Phase 2.2 schema — probe action                                   #
+# ------------------------------------------------------------------ #
+
 def test_examiner_returns_probe_outcome_from_llm_json() -> None:
     router = ModelRouter(
         _StaticProvider(
-            '{"turn_kind":"probe","text":"Why is that baseline enough?","source_ref":"turn://turn-1","signals":[]}'
+            '{"action":"probe","text":"Why is that baseline enough?","rationale":"model_rationale under-served","primitive_hint":"socratic_rebuttal"}'
         ),
         sleep=lambda _: None,
     )
@@ -59,12 +69,44 @@ def test_examiner_returns_probe_outcome_from_llm_json() -> None:
     outcome, failure = examiner.review("sess-1", [_turn()], memory_text="Candidate prefers simple models.")
 
     assert failure is None
+    assert outcome.action == "probe"
     assert outcome.ok_to_advance is False
     assert outcome.probe_text == "Why is that baseline enough?"
-    assert outcome.source_ref == "turn://turn-1"
+    assert outcome.rationale == "model_rationale under-served"
+    assert outcome.primitive_hint == "socratic_rebuttal"
+
+
+def test_examiner_returns_close_outcome() -> None:
+    router = ModelRouter(
+        _StaticProvider(
+            '{"action":"close","reason":"coverage_saturated","rationale":"all dims above threshold"}'
+        ),
+        sleep=lambda _: None,
+    )
+    examiner = LlmExaminer(router)
+
+    outcome, failure = examiner.review("sess-3", [_turn()])
+
+    assert failure is None
+    assert outcome.action == "close"
+    assert outcome.ok_to_advance is True
+    assert outcome.close_reason == "coverage_saturated"
+    assert outcome.probe_text is None
+
+
+def test_examiner_close_with_unknown_reason_defaults_to_pivot() -> None:
+    router = ModelRouter(
+        _StaticProvider('{"action":"close","reason":"BOGUS","rationale":"x"}'),
+        sleep=lambda _: None,
+    )
+    examiner = LlmExaminer(router)
+    outcome, failure = examiner.review("sess-4", [])
+    assert failure is None
+    assert outcome.close_reason == "examiner_pivot"
 
 
 def test_examiner_advances_on_malformed_output() -> None:
+    """Both retry attempts fail → returns ok_to_advance + failure."""
     router = ModelRouter(_MalformedProvider(), sleep=lambda _: None)
     examiner = LlmExaminer(router)
 
@@ -73,3 +115,47 @@ def test_examiner_advances_on_malformed_output() -> None:
     assert outcome.ok_to_advance is True
     assert outcome.probe_text is None
     assert failure is not None
+
+
+def test_examiner_probe_requires_nonempty_text() -> None:
+    router = ModelRouter(
+        _StaticProvider('{"action":"probe","text":"","rationale":"x"}'),
+        sleep=lambda _: None,
+    )
+    examiner = LlmExaminer(router)
+    outcome, failure = examiner.review("sess-5", [])
+    # Empty probe text → treated as failure after both retries
+    assert outcome.ok_to_advance is True
+    assert failure is not None
+
+
+# ------------------------------------------------------------------ #
+#  Coverage context injection                                         #
+# ------------------------------------------------------------------ #
+
+def test_examiner_injects_coverage_into_prompt() -> None:
+    """When a CoverageContext is provided, the prompt includes coverage state."""
+    captured: list[str] = []
+
+    class _CapturingProvider:
+        def call(self, *, tier, prompt, stream=False, timeout=None):
+            captured.append(prompt)
+            return '{"action":"probe","text":"Explain your metric choice.","rationale":"experiment_design under-served"}'
+
+    router = ModelRouter(_CapturingProvider(), sleep=lambda _: None)
+    examiner = LlmExaminer(router)
+    ctx = CoverageContext(
+        problem_id="p1",
+        under_served_dims=("experiment_design", "communication"),
+        signal_map={"problem_framing": 0.9, "experiment_design": 0.1},
+        probe_count=2,
+        max_probes=6,
+    )
+    outcome, failure = examiner.review("sess-cov", [], coverage=ctx)
+
+    assert failure is None
+    assert outcome.action == "probe"
+    assert captured, "no prompt was captured"
+    prompt = captured[0]
+    assert "experiment_design" in prompt
+    assert "Probes issued: 2 / 6" in prompt

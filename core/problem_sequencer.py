@@ -1,15 +1,15 @@
-"""ProblemSequencer — manages the ordered list of Problems for a session.
+"""ProblemSequencer - manages the ordered list of Problems for a session.
 
 FSM ordering invariants (2.1.6):
   1. ``ProblemIntroduced(N)`` must precede any Turn for that problem.
   2. ``ProblemClosed(N)`` must precede ``ProblemIntroduced(N+1)``.
-  3. ``SessionEnded`` follows the last ``ProblemClosed`` — never before.
+  3. ``SessionEnded`` follows the last ``ProblemClosed`` - never before.
 
 This module provides:
-  ``ProblemSequencer``  — stateless service; given the planned problem list
+  ``ProblemSequencer``  - stateless service; given the planned problem list
                           and current projection state, decides the next
                           problem-boundary event to emit (if any).
-  ``SequencerAction``   — discriminated union returned by ``next_event``.
+  ``SequencerAction``   - discriminated union returned by ``next_event``.
 
 The sequencer is *pure*: no I/O, no side effects.  The session_runner owns
 writing to the event log.
@@ -20,7 +20,6 @@ from dataclasses import dataclass
 
 from core.domain import Problem, ProblemId
 from core.projections import _ProblemStatus, _SessionRecord
-
 
 # ---------------------------------------------------------------------------
 # Action types
@@ -35,7 +34,7 @@ class IntroduceNext:
 
 @dataclass(frozen=True)
 class EndSession:
-    """All problems are closed — emit ``SessionEnded``."""
+    """All problems are closed - emit ``SessionEnded``."""
     reason: str = "all_problems_closed"
 
 
@@ -60,7 +59,7 @@ class ProblemSequencer:
     problems:
         Ordered list of Problems planned for the session.  Determined once at
         session-start (drawn from ProblemBank).  Empty list is valid for legacy
-        sessions that predate Phase 2.1 — the sequencer is a no-op in that
+        sessions that predate Phase 2.1 - the sequencer is a no-op in that
         case.
     """
 
@@ -79,10 +78,10 @@ class ProblemSequencer:
 
         Decision tree
         -------------
-        1. If no problems planned → Noop (legacy / phase α session).
-        2. If a problem is currently active → Noop (let examiner run).
-        3. If all problems have been closed (or list is exhausted) → EndSession.
-        4. Otherwise → IntroduceNext with the first un-introduced problem.
+        1. If no problems planned -> Noop (legacy / phase alpha session).
+        2. If a problem is currently active -> Noop (let examiner run).
+        3. If all problems have been closed (or list is exhausted) -> EndSession.
+        4. Otherwise -> IntroduceNext with the first un-introduced problem.
         """
         if not self._problems:
             return Noop(reason="no_problems_planned")
@@ -90,7 +89,7 @@ class ProblemSequencer:
         statuses = record["problem_status"]
         current_id = record["current_problem_id"]
 
-        # Rule 2: an active problem is in flight — wait for it to close.
+        # Rule 2: an active problem is in flight - wait for it to close.
         if current_id is not None and statuses.get(current_id) == _ProblemStatus.active:
             return Noop(reason="problem_active")
 
@@ -110,7 +109,7 @@ class ProblemSequencer:
         if all_introduced_ids <= closed_ids:
             return EndSession()
 
-        # Some problems introduced but not yet closed → wait.
+        # Some problems introduced but not yet closed -> wait.
         return Noop(reason="awaiting_close")
 
     # ------------------------------------------------------------------

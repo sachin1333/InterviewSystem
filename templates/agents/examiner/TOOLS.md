@@ -1,34 +1,46 @@
 ---
 title: "Examiner — TOOLS"
 agent: examiner
+phase: "2.2+"
 ---
 
-# What you can call
+# Context injected into your prompt
 
-- `session.recent_turns(n)` — returns the last n turns in order, with references.
-- `session.artifacts()` — returns the list of artifacts produced in this session.
-- `memory.read()` — returns the curated MEMORY.md for this session.
-- `memory.append(note)` — append one line of curated observation. Use sparingly — only for things that will matter at scoring time.
+Before your response, the system injects:
 
-# What you cannot call
-
-- The Runtime. You do not execute code.
-- The rubric. You infer dimensions from the questions you are asked to probe; you do not read weights.
-- The Scorers. You are adjacent to them, not orchestrating them.
+- **`transcript`** — full conversation for the *active problem only* (not the full session).
+- **`under_served_dims`** — list of rubric dimensions still below their signal threshold.
+- **`signal_map`** — current accumulated signal per dimension (0.0–1.0).
+- **`probe_count`** — number of probes already issued for this problem.
+- **`max_probes`** — hard cap; at or above this you MUST emit `close`.
 
 # Response contract
 
-Return exactly one JSON object:
+Return **exactly one** JSON object — no markdown, no commentary:
 
 ```json
 {
-  "turn_kind": "probe",
+  "action": "probe" | "close",
   "text": "...",
-  "source_ref": "turn://..." | "artifact://...",
-  "signals": [
-    { "dimension": "...", "value": 0.0, "note": "...", "source_ref": "..." }
-  ]
+  "reason": "coverage_saturated" | "time_capped" | "examiner_pivot" | "max_probes",
+  "rationale": "...",
+  "primitive_hint": "think_aloud" | "socratic_rebuttal" | "counterfactual" | "resume_deep_dive" | "verbal_whiteboard" | "one_bullet"
 }
 ```
 
-`signals` may be empty. `source_ref` on the probe is required.
+Field rules:
+
+| Field | Required for | Notes |
+|---|---|---|
+| `action` | always | `"probe"` or `"close"` |
+| `text` | `probe` | The question text shown to the candidate. 1–3 sentences. |
+| `reason` | `close` | Why you are closing. |
+| `rationale` | always | Internal note for audit log. Not shown to candidate. 1 sentence. |
+| `primitive_hint` | optional | Hint to renderer about probe style. |
+
+# What you cannot do
+
+- Execute code.
+- Read rubric weights.
+- Invoke scorers.
+- Produce any output other than the single JSON object above.

@@ -1,13 +1,57 @@
-cases:
-  - body: |
-      Please analyze the following business problem: a SaaS company is seeing
-      rising churn among enterprise accounts. State your assumptions, outline
-      your analytical approach, and explain the trade-offs in your solution.
-  - body: |
-      You have been given a dataset with 12 months of user-engagement logs for
-      a mobile app. Walk through how you would identify the leading indicators
-      of retention versus churn, and describe the model you would build.
-  - body: |
-      A/B test results show a 5% lift in click-through rate but no change in
-      conversion. How do you interpret these results and what would you
-      recommend as the next step?
+version: "1"
+prompts:
+  - id: rev_lift_marketing
+    primitive: think_aloud
+    body: |
+      Marketing wants to forecast incremental revenue from a planned $4M Q3
+      campaign. Historical attribution is multi-touch and noisy. Walk me
+      through how you would frame this, what data you would ask for, and
+      the first model class you would try.
+  - id: churn_subscription
+    primitive: think_aloud
+    body: |
+      A subscription product has seen monthly churn climb 1.2pp -> 4.0pp
+      over six months. Leadership wants a recommendation in two weeks.
+      How do you decompose what is driving this, and what is your plan
+      for the first 72 hours?
+  - id: ranking_relevance
+    primitive: think_aloud
+    body: |
+      The product team thinks search relevance has degraded since the
+      January index migration but the offline NDCG tests are flat. Outline
+      how you would investigate online vs offline divergence and what
+      experiments you would run.
+  - id: fraud_imbalance
+    primitive: think_aloud
+    body: |
+      A payments team is building a fraud classifier. Positive class is
+      0.3% of traffic. They are debating XGBoost vs a deep tabular model.
+      How would you frame the metric, the baseline, and the resampling
+      strategy before any modeling?
+  - id: ab_test_misread
+    primitive: think_aloud
+    body: |
+      An experiment team launched a new pricing page. Day-7 retention is
+      up 2.8% with p=0.04 but 14-day revenue per user is flat. PM wants
+      to ship. What do you say, and what would you check before agreeing?
+  - id: time_series_forecast
+    primitive: think_aloud
+    body: |
+      Operations needs a 13-week demand forecast at SKU x DC granularity
+      across ~80k SKUs. Last team's solution was a single Prophet per SKU.
+      Walk me through how you would scope the redesign and what you would
+      try first.
+  - id: feature_drift_prod
+    primitive: think_aloud
+    body: |
+      A loan-approval model in production has held AUC steady but
+      approval rate dropped 6% over a quarter. PM blames the model. How
+      do you investigate, and how do you frame the report you owe by
+      Friday?
+  - id: nlp_intent_routing
+    primitive: think_aloud
+    body: |
+      Customer support wants intent-based ticket routing across 38
+      categories. They have 18 months of partly-labelled tickets. How
+      would you frame a v1 plan, and what is the smallest thing you would
+      ship in two weeks?

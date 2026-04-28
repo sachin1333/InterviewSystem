@@ -14,6 +14,7 @@ from core.events import (
     CandidateIdle,
     CandidateJoined,
     ChallengerFailed,
+    CoverageSnapshot,
     Envelope,
     ExaminerFailed,
     HumanOverride,
@@ -126,6 +127,8 @@ def test_event_types_registry_covers_all_payloads():
         StageEntered, StageCompleted,
         # Phase 2.1: problem boundaries
         ProblemIntroduced, ProblemClosed,
+        # Phase 2.2: coverage tracker snapshot
+        CoverageSnapshot,
     }
     assert expected == EVENT_TYPES
 

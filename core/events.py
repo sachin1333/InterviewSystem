@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-from typing import Literal
 
 from core.domain import (
     Actor,
@@ -138,7 +136,7 @@ class SpeechFinalized(_Evt):
     wpm: int = Field(ge=0)
     first_partial_ms: int = Field(ge=0)  # time-to-first-partial-transcript
     final_ms: int = Field(ge=0)          # total speech duration
-    filler_count: int = Field(ge=0)      # "um", "uh" tally — feeds authenticity scorer
+    filler_count: int = Field(ge=0)      # "um", "uh" tally - feeds authenticity scorer
     degraded: bool = False
 
 
@@ -206,10 +204,10 @@ class StageCompleted(_Evt):
 class ProblemIntroduced(_Evt):
     """Fired when the examiner presents a new problem to the candidate.
 
-    ``problem_id``   – references a ``Problem.id`` in the session's problem list.
-    ``opener_text``  – the narrow first question shown to the candidate.
-    ``ordinal``      – 1-based position in the session's problem sequence
-                       (Problem 1 of N, Problem 2 of N, …).
+    ``problem_id``   - references a ``Problem.id`` in the session's problem list.
+    ``opener_text``  - the narrow first question shown to the candidate.
+    ``ordinal``      - 1-based position in the session's problem sequence
+                       (Problem 1 of N, Problem 2 of N, ...).
     """
 
     problem_id: ProblemId
@@ -221,10 +219,10 @@ class ProblemClosed(_Evt):
     """Fired when the examiner decides the current problem is done.
 
     ``reason`` encodes *why* the problem was closed:
-    - ``coverage_saturated`` – examiner judged rubric signal sufficient.
-    - ``time_capped``        – wall-clock budget for the problem elapsed.
-    - ``examiner_pivot``     – examiner chose to move on (editorial decision).
-    - ``max_probes``         – safety cap on probes-per-problem fired.
+    - ``coverage_saturated`` - examiner judged rubric signal sufficient.
+    - ``time_capped``        - wall-clock budget for the problem elapsed.
+    - ``examiner_pivot``     - examiner chose to move on (editorial decision).
+    - ``max_probes``         - safety cap on probes-per-problem fired.
 
     ``rationale`` is a short human-readable note produced by the examiner
     at close time (for recruiter dashboard and audit).
@@ -233,6 +231,19 @@ class ProblemClosed(_Evt):
     problem_id: ProblemId
     reason: Literal["coverage_saturated", "time_capped", "examiner_pivot", "max_probes"]
     rationale: str = ""
+
+
+class CoverageSnapshot(_Evt):
+    """Dim->signal snapshot at the moment a probe is generated (Phase 2.2).
+
+    Persisted for replay and recruiter-dashboard audit.  ``signal_map`` is a
+    plain dict so it survives JSON round-trips cleanly.
+    """
+
+    problem_id: ProblemId
+    probe_count: int = Field(ge=0)
+    signal_map: dict[str, float]   # Dimension.value -> accumulated signal
+    under_served: list[str]        # Dimension.values that are below threshold
 
 
 EVENT_TYPES: set[type] = {
@@ -254,10 +265,12 @@ EVENT_TYPES: set[type] = {
     CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
     # intake / override
     ProfileIngested, HumanOverride,
-    # case stages (legacy — kept for replay of Phase α–θ sessions)
+    # case stages (legacy - kept for replay of Phase alpha-theta sessions)
     StageEntered, StageCompleted,
     # Phase 2.1: problem boundaries
     ProblemIntroduced, ProblemClosed,
+    # Phase 2.2: coverage tracker snapshot
+    CoverageSnapshot,
 }
 
 

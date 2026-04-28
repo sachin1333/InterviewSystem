@@ -7,7 +7,7 @@ from typing import NewType
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# Opaque ID type for problems — str at runtime, distinct in type-checkers.
+# Opaque ID type for problems - str at runtime, distinct in type-checkers.
 ProblemId = NewType("ProblemId", str)
 
 
@@ -104,13 +104,13 @@ class Score(_Frozen):
 class Problem(_Frozen):
     """A single problem statement within a multi-problem session.
 
-    ``id``                   – opaque identifier, unique within a session.
-    ``opener_text``          – the narrow first question shown to the candidate.
-    ``context``              – full background revealed only to the examiner.
-    ``target_dimensions``    – rubric dims this problem is designed to probe.
-    ``dim_thresholds``       – per-dim signal threshold at which coverage is
+    ``id``                   - opaque identifier, unique within a session.
+    ``opener_text``          - the narrow first question shown to the candidate.
+    ``context``              - full background revealed only to the examiner.
+    ``target_dimensions``    - rubric dims this problem is designed to probe.
+    ``dim_thresholds``       - per-dim signal threshold at which coverage is
                                considered saturated (0..1 float per Dimension).
-    ``expected_duration_s``  – soft time budget in seconds; used for pacing
+    ``expected_duration_s``  - soft time budget in seconds; used for pacing
                                guidance, NOT a hard cut-off.
     """
 
@@ -129,6 +129,6 @@ class Session(_Frozen):
     ended_at: datetime | None = None
     turns: tuple[Turn, ...] = ()
     artifacts: tuple[Artifact, ...] = ()
-    # Phase 2.1 — multi-problem fields (empty for legacy sessions)
+    # Phase 2.1 - multi-problem fields (empty for legacy sessions)
     problems: tuple[Problem, ...] = ()
     current_problem_id: ProblemId | None = None

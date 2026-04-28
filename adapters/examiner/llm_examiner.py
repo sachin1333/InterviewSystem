@@ -1,7 +1,22 @@
+"""LlmExaminer - Phase 2.2 rewrite.
+
+The examiner now drives problem boundaries.  On every call it returns
+**exactly one** JSON object:
+
+  {"action": "probe"|"close", "text"?: str, "reason"?: str,
+   "rationale": str, "primitive_hint"?: str}
+
+``probe``  -> post a follow-up question to the candidate.
+``close``  -> declare the problem finished; session_runner emits ProblemClosed.
+
+Coverage state (under-served dims, accumulated signals, probe count) is
+injected into the prompt on every call so the model can make an informed
+probe-or-close decision.
+"""
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -9,6 +24,10 @@ from typing import Any, Literal, Protocol
 from core.contracts import Examiner
 from core.domain import Dimension, Signal, Turn
 from core.events import ExaminerFailed
+
+_CLOSE_REASONS = frozenset(
+    {"coverage_saturated", "time_capped", "examiner_pivot", "max_probes"}
+)
 
 
 class JsonModelRouter(Protocol):
@@ -30,9 +49,43 @@ class JsonModelRouter(Protocol):
 
 
 @dataclass(frozen=True)
+class CoverageContext:
+    """Coverage state passed into the examiner prompt each call.
+
+    All fields have safe defaults so callers can omit them for legacy paths.
+    """
+
+    problem_id: str = ""
+    under_served_dims: tuple[str, ...] = ()
+    signal_map: dict[str, float] = field(default_factory=dict)
+    probe_count: int = 0
+    max_probes: int = 6
+    problem_transcript: str = ""
+
+
+@dataclass(frozen=True)
 class ExaminerOutcome:
-    ok_to_advance: bool
+    """Result of one examiner call.
+
+    ``action``       - ``"probe"`` or ``"close"``.
+    ``probe_text``   - non-None when action == "probe".
+    ``close_reason`` - non-None when action == "close".
+    ``rationale``    - examiner's internal note (not shown to candidate).
+    ``primitive_hint`` - optional style hint for the probe renderer.
+
+    Legacy fields kept for backward compatibility:
+      ``ok_to_advance`` - True when action == "close" (or on failure).
+      ``source_ref``    - always None in Phase 2.2.
+      ``signals``       - always empty in Phase 2.2 (coverage tracker owns signals).
+    """
+
+    action: Literal["probe", "close"] = "probe"
     probe_text: str | None = None
+    close_reason: str | None = None
+    rationale: str = ""
+    primitive_hint: str | None = None
+    # Legacy compat
+    ok_to_advance: bool = False
     source_ref: str | None = None
     signals: tuple[Signal, ...] = ()
 
@@ -62,41 +115,72 @@ class LlmExaminer(Examiner):
         recent_turns: Sequence[Turn],
         *,
         memory_text: str = "",
+        coverage: CoverageContext | None = None,
     ) -> tuple[ExaminerOutcome, ExaminerFailed | None]:
-        try:
-            payload = self.model_router.call_json(
-                tier="top",
-                prompt=self._compose_prompt(session_id, recent_turns, memory_text),
-                schema={"turn_kind", "text", "source_ref", "signals"},
-                deadline_ms=2000,
-            )
-            outcome = self._parse_outcome(payload)
-        except Exception as exc:
-            return (
-                ExaminerOutcome(ok_to_advance=True),
-                ExaminerFailed(reason=str(exc) or exc.__class__.__name__),
-            )
-        return outcome, None
+        """Call the LLM and parse a probe-or-close decision.
+
+        Retries once on malformed JSON before returning a failure outcome.
+        """
+        prompt = self._compose_prompt(
+            session_id, recent_turns, memory_text, coverage=coverage
+        )
+        # Only "action" is strictly required; other fields are action-dependent.
+        # "rationale" is also expected but tolerated as empty string on miss.
+        schema: set[str] = {"action"}
+
+        for attempt in range(2):
+            try:
+                payload = self.model_router.call_json(
+                    tier="top",
+                    prompt=prompt,
+                    schema=schema,
+                    deadline_ms=2000,
+                )
+                outcome = self._parse_outcome(payload)
+                return outcome, None
+            except Exception as exc:
+                if attempt == 0:
+                    # One-shot retry on any parse/LLM error.
+                    continue
+                return (
+                    ExaminerOutcome(ok_to_advance=True),
+                    ExaminerFailed(reason=str(exc) or exc.__class__.__name__),
+                )
+        # unreachable
+        return ExaminerOutcome(ok_to_advance=True), None
 
     def iter_review(
         self,
         session_id: str,
         recent_turns: Sequence[Any],
+        *,
+        coverage: CoverageContext | None = None,
     ) -> Iterator[str]:
-        """Yield probe text token-by-token from the streaming examiner path.
+        """Stream probe text token-by-token (SSE path).
 
-        Passes an empty turn list to _compose_prompt (TurnInfo dicts from
-        projections are not compatible with Turn domain objects).  The prompt
-        still carries the session_id for context.
+        Yields all raw tokens from the model.  The session_runner is
+        responsible for calling ``review()`` separately to obtain the parsed
+        ``ExaminerOutcome`` and decide whether to emit ``ProblemClosed``.
         """
-        prompt = self._compose_prompt(session_id, [], memory_text="")
+        prompt = self._compose_prompt(
+            session_id,
+            [],           # TurnInfo dicts from projections != Turn domain objects
+            memory_text="",
+            coverage=coverage,
+        )
         yield from self.model_router.iter_streaming(tier="mid", prompt=prompt)
+
+    # ------------------------------------------------------------------ #
+    #  Prompt composition                                                  #
+    # ------------------------------------------------------------------ #
 
     def _compose_prompt(
         self,
         session_id: str,
         recent_turns: Sequence[Turn],
         memory_text: str,
+        *,
+        coverage: CoverageContext | None = None,
     ) -> str:
         parts = [
             self._load_template("IDENTITY.md"),
@@ -105,12 +189,27 @@ class LlmExaminer(Examiner):
             self._load_template("PACING.md"),
             f"Session: {session_id}",
             f"Memory: {memory_text or '(empty)'}",
-            "Recent turns:",
         ]
-        parts.extend(
-            f"- {turn.actor.value}:{turn.kind.value}:{turn.id} refs={list(turn.produced_artifact_refs)}"
-            for turn in recent_turns
-        )
+
+        # ── Coverage state injection (Phase 2.2) ──
+        if coverage is not None:
+            parts.append(_format_coverage_context(coverage))
+
+        # ── Problem-scoped transcript ──
+        if coverage is not None and coverage.problem_transcript:
+            parts.append(
+                "## Problem transcript (this problem only)\n\n"
+                + coverage.problem_transcript
+            )
+
+        # ── Recent domain Turn objects (non-SSE path only) ──
+        if recent_turns:
+            turn_lines = [
+                f"- {t.actor.value}:{t.kind.value}:{t.id} refs={list(t.produced_artifact_refs)}"
+                for t in recent_turns
+            ]
+            parts.append("## Recent turns\n\n" + "\n".join(turn_lines))
+
         return "\n\n".join(parts)
 
     def _load_template(self, name: str) -> str:
@@ -120,32 +219,43 @@ class LlmExaminer(Examiner):
         except OSError:
             return ""
 
+    # ------------------------------------------------------------------ #
+    #  Output parsing                                                      #
+    # ------------------------------------------------------------------ #
+
     def _parse_outcome(self, payload: dict[str, Any]) -> ExaminerOutcome:
-        turn_kind = payload.get("turn_kind")
+        action = payload.get("action")
         text = payload.get("text")
-        source_ref = payload.get("source_ref")
-        if turn_kind != "probe" or not isinstance(text, str) or not text.strip():
-            raise ValueError("invalid examiner payload: missing probe text")
-        if not isinstance(source_ref, str) or not source_ref.strip():
-            raise ValueError("invalid examiner payload: missing source_ref")
+        reason = payload.get("reason")
+        rationale = str(payload.get("rationale") or "")
+        primitive_hint = payload.get("primitive_hint") or None
 
-        raw_signals = payload.get("signals")
-        signals: list[Signal] = []
-        if isinstance(raw_signals, list):
-            for raw_signal in raw_signals:
-                parsed = self._parse_signal(raw_signal)
-                if parsed is not None:
-                    signals.append(parsed)
+        if action == "probe":
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("probe action requires non-empty 'text'")
+            return ExaminerOutcome(
+                action="probe",
+                probe_text=text.strip(),
+                rationale=rationale,
+                primitive_hint=primitive_hint,
+                ok_to_advance=False,
+            )
 
-        return ExaminerOutcome(
-            ok_to_advance=False,
-            probe_text=text,
-            source_ref=source_ref,
-            signals=tuple(signals),
-        )
+        if action == "close":
+            close_reason = reason if reason in _CLOSE_REASONS else "examiner_pivot"
+            return ExaminerOutcome(
+                action="close",
+                close_reason=close_reason,
+                rationale=rationale,
+                primitive_hint=primitive_hint,
+                ok_to_advance=True,
+            )
+
+        raise ValueError(f"unknown examiner action: {action!r}")
 
     @staticmethod
     def _parse_signal(raw_signal: object) -> Signal | None:
+        """Legacy helper - kept for backward compatibility; not called in 2.2."""
         if not isinstance(raw_signal, dict):
             return None
         raw_dimension = raw_signal.get("dimension")
@@ -168,3 +278,29 @@ class LlmExaminer(Examiner):
             emitted_by="examiner",
             at=datetime.now(UTC),
         )
+
+
+# ------------------------------------------------------------------ #
+#  Coverage context formatter                                         #
+# ------------------------------------------------------------------ #
+
+def _format_coverage_context(ctx: CoverageContext) -> str:
+    lines = [
+        "## Coverage state",
+        f"Problem: {ctx.problem_id or '(unknown)'}",
+        f"Probes issued: {ctx.probe_count} / {ctx.max_probes}",
+    ]
+    if ctx.under_served_dims:
+        lines.append(
+            "Under-served dimensions (prioritise these): "
+            + ", ".join(ctx.under_served_dims)
+        )
+    else:
+        lines.append("Coverage: SATURATED - all dimensions above threshold.")
+
+    if ctx.signal_map:
+        lines.append("Accumulated signal per dimension:")
+        for dim, sig in sorted(ctx.signal_map.items()):
+            lines.append(f"  {dim}: {sig:.2f}")
+
+    return "\n".join(lines)

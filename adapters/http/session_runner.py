@@ -11,14 +11,25 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from adapters.challenger.llm_challenger import LlmChallenger
-from adapters.examiner.llm_examiner import LlmExaminer
+from adapters.examiner.llm_examiner import CoverageContext, LlmExaminer
 from adapters.scorer._base import BaseLlmScorer
 from adapters.scorer.aggregator import RubricAggregator
 from core.case_loader import CaseDefinition, CaseStage
 from core.contracts import EventLog
-from core.domain import Actor, Artifact, ArtifactKind, Dimension, Problem, Signal, TurnKind
+from core.coverage import CoverageTracker
+from core.domain import (
+    Actor,
+    Artifact,
+    ArtifactKind,
+    Dimension,
+    Problem,
+    ProblemId,
+    Signal,
+    TurnKind,
+)
 from core.events import (
     ArtifactAttached,
+    CoverageSnapshot,
     Envelope,
     ExaminerFailed,
     ProblemClosed,
@@ -45,7 +56,7 @@ from core.orchestrator import (
 )
 from core.problem_sequencer import EndSession as SeqEndSession
 from core.problem_sequencer import IntroduceNext, ProblemSequencer
-from core.projections import ArtifactStore, SessionStore
+from core.projections import ArtifactStore, RuntimeStore, ScoreStore, SessionStore, SignalStore
 from core.session_boot import replay_with_stages
 
 _MAX_STEPS = 100
@@ -79,6 +90,8 @@ class SessionRunner:
     # StageEntered/StageCompleted are still emitted for analytics but the FSM
     # no longer branches on them when `problems` is set.
     case: CaseDefinition | None = None
+    # Phase 2.2: per-problem probe safety cap.
+    max_probes_per_problem: int = 6
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -255,7 +268,7 @@ class SessionRunner:
             session_id, log,
             ProblemClosed(
                 problem_id=ProblemId(problem_id),
-                reason=reason,  # type: ignore[arg-type]
+                reason=reason,
                 rationale=rationale,
             ),
         )
@@ -307,24 +320,92 @@ class SessionRunner:
         ))
 
     def _do_probe(self, session_id: str, log: EventLog) -> None:
-        """Issue an examiner probe.
+        """Issue an examiner probe or close the current problem (Phase 2.2).
 
-        If examiner is absent or returns ok_to_advance, emits a synthetic
-        TurnPosted(examiner, probe) with no artifact to consume the probe
-        budget.  The candidate will see the last question text and be asked
-        for a defense turn.
+        1. Build CoverageTracker from SignalEmitted events in the log.
+        2. Check per-problem safety cap: force close if at/over max_probes.
+        3. Call LlmExaminer with coverage context + problem-scoped transcript.
+        4. If examiner returns ``close`` → emit ProblemClosed; return without
+           posting a probe turn (ProblemSequencer will drive the next action).
+        5. If examiner returns ``probe`` → emit CoverageSnapshot, post turn +
+           artifact.
+        6. Fallback (no examiner, or failure) → post a probe turn with no text
+           so the orchestrator's probe budget still drains.
         """
-        probe_text: str | None = None
+        sessions, _, _, _, _ = _replay_minimal(session_id, log)
+        s = sessions.get(session_id)
+        current_problem_id: str | None = s["current_problem_id"] if s else None
+
+        # ── Build coverage tracker from event log ──
+        tracker = _build_coverage_tracker(session_id, log)
+
+        # ── Count probes for current problem ──
+        probe_count = _count_probes_for_problem(session_id, log, current_problem_id)
+
+        # ── Safety cap: force close if probe budget exhausted ──
+        if current_problem_id is not None and probe_count >= self.max_probes_per_problem:
+            self._do_close_problem(
+                session_id, log,
+                problem_id=current_problem_id,
+                reason="max_probes",
+                rationale=f"Safety cap reached ({probe_count}/{self.max_probes_per_problem} probes).",
+            )
+            return
+
+        # ── Build coverage context for examiner ──
+        problem_obj = _find_problem(self.problems, current_problem_id)
+        thresholds = problem_obj.dim_thresholds if problem_obj else {}
+        under_served = (
+            tracker.under_served(ProblemId(current_problem_id), thresholds)
+            if current_problem_id else list(Dimension)
+        )
+        signal_map = (
+            tracker.signal_map(ProblemId(current_problem_id))
+            if current_problem_id else {}
+        )
+        transcript = _build_problem_transcript(session_id, log, current_problem_id)
+
+        coverage = CoverageContext(
+            problem_id=current_problem_id or "",
+            under_served_dims=tuple(d.value for d in under_served),
+            signal_map={d.value: v for d, v in signal_map.items()},
+            probe_count=probe_count,
+            max_probes=self.max_probes_per_problem,
+            problem_transcript=transcript,
+        )
+
+        # ── Ask examiner ──
         failure: ExaminerFailed | None = None
-
         if self.examiner is not None:
-            # Call examiner with empty recent_turns (simplified for Phase ε).
-            outcome, failure = self.examiner.review(session_id, [])
-            if not outcome.ok_to_advance and outcome.probe_text:
-                probe_text = outcome.probe_text
+            outcome, failure = self.examiner.review(session_id, [], coverage=coverage)
 
+            if outcome.action == "close" and current_problem_id is not None:
+                self._do_close_problem(
+                    session_id, log,
+                    problem_id=current_problem_id,
+                    reason=outcome.close_reason or "examiner_pivot",
+                    rationale=outcome.rationale,
+                )
+                return
+
+            # Emit CoverageSnapshot before posting probe turn (task 2.2.4)
+            if current_problem_id is not None:
+                self._append(session_id, log, CoverageSnapshot(
+                    problem_id=ProblemId(current_problem_id),
+                    probe_count=probe_count,
+                    signal_map={d.value: v for d, v in signal_map.items()},
+                    under_served=[d.value for d in under_served],
+                ))
+
+            probe_text: str | None = outcome.probe_text if not outcome.ok_to_advance else None
+        else:
+            probe_text = None
+
+        # ── Post probe turn ──
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
-        self._append(session_id, log, TurnPosted(id=turn_id, actor=Actor.examiner, kind=TurnKind.probe))
+        self._append(session_id, log, TurnPosted(
+            id=turn_id, actor=Actor.examiner, kind=TurnKind.probe
+        ))
         if probe_text:
             artifact_id = f"a-{uuid.uuid4().hex[:8]}"
             self._append(session_id, log, ArtifactAttached(
@@ -412,6 +493,8 @@ class SessionRunner:
             )
 
         self._append(session_id, log, SignalEmitted(signal=signal))
+        # CoverageTracker is rebuilt from SignalEmitted events on each request
+        # (event-sourced): no in-memory update needed here.
 
     def _do_aggregate(self, session_id: str, log: EventLog) -> None:
         all_signals: list[Signal] = []
@@ -441,3 +524,120 @@ class SessionRunner:
                         if content is not None:
                             return content
         return None
+
+
+# ------------------------------------------------------------------ #
+#  Module-level helpers (pure, no class dependency)                  #
+# ------------------------------------------------------------------ #
+
+def _replay_minimal(
+    session_id: str,
+    log: EventLog,
+) -> tuple[SessionStore, ScoreStore, SignalStore, RuntimeStore, ArtifactStore]:
+    """Thin wrapper so _do_probe can get SessionStore without circular import."""
+    from core.session_boot import replay
+    return replay(session_id, log)
+
+
+def _build_coverage_tracker(session_id: str, log: EventLog) -> CoverageTracker:
+    """Rebuild CoverageTracker from SignalEmitted events (event-sourced)."""
+    tracker = CoverageTracker()
+    for env in log.get_session(session_id):
+        if isinstance(env.payload, SignalEmitted):
+            sig = env.payload.signal
+            # Attribute signal to current_problem_id at time of emission.
+            # We don't have per-signal problem tagging yet, so we use a
+            # best-effort approach: check CoverageSnapshot for problem context.
+            # For now, accumulate all signals under the session-level key.
+            # Phase 2.3 will add problem_id to SignalEmitted.
+            pass  # tracker populated below via per-problem attribution
+    # Per-problem attribution via ProblemIntroduced / ProblemClosed brackets:
+    current_pid: str | None = None
+    for env in log.get_session(session_id):
+        if isinstance(env.payload, ProblemIntroduced):
+            current_pid = env.payload.problem_id
+        elif isinstance(env.payload, ProblemClosed):
+            current_pid = None
+        elif isinstance(env.payload, SignalEmitted) and current_pid is not None:
+            sig = env.payload.signal
+            tracker.record(ProblemId(current_pid), sig.dimension, sig.value)
+    return tracker
+
+
+def _count_probes_for_problem(
+    session_id: str, log: EventLog, problem_id: str | None
+) -> int:
+    """Count TurnPosted(examiner, probe) events under the active problem bracket."""
+    if problem_id is None:
+        return 0
+    count = 0
+    inside = False
+    for env in log.get_session(session_id):
+        if isinstance(env.payload, ProblemIntroduced):
+            if env.payload.problem_id == problem_id:
+                inside = True
+        elif isinstance(env.payload, ProblemClosed):
+            if env.payload.problem_id == problem_id:
+                inside = False
+        elif (
+            inside
+            and isinstance(env.payload, TurnPosted)
+            and env.payload.actor == Actor.examiner
+            and env.payload.kind == TurnKind.probe
+        ):
+            count += 1
+    return count
+
+
+def _find_problem(problems: list[Problem], problem_id: str | None) -> Problem | None:
+    if problem_id is None:
+        return None
+    for p in problems:
+        if p.id == problem_id:
+            return p
+    return None
+
+
+def _build_problem_transcript(
+    session_id: str, log: EventLog, problem_id: str | None
+) -> str:
+    """Build a text transcript scoped to the active problem only.
+
+    Includes challenger/examiner questions and candidate answers,
+    using ArtifactAttached content for turn text.
+    """
+    if problem_id is None:
+        return ""
+
+    # Collect artifact content map
+    artifact_content: dict[str, str] = {}
+    for env in log.get_session(session_id):
+        if isinstance(env.payload, ArtifactAttached) and env.payload.content:
+            artifact_content[env.payload.id] = env.payload.content
+
+    # Map turn_id → artifact content
+    turn_artifact: dict[str, str] = {}
+    for env in log.get_session(session_id):
+        if isinstance(env.payload, ArtifactAttached) and env.payload.content:
+            turn_artifact[env.payload.produced_by_turn_id] = env.payload.content
+
+    lines: list[str] = []
+    inside = False
+    for env in log.get_session(session_id):
+        if isinstance(env.payload, ProblemIntroduced):
+            if env.payload.problem_id == problem_id:
+                inside = True
+        elif isinstance(env.payload, ProblemClosed):
+            if env.payload.problem_id == problem_id:
+                inside = False
+        elif inside and isinstance(env.payload, TurnPosted):
+            tp = env.payload
+            actor_label = {
+                Actor.challenger: "Interviewer",
+                Actor.examiner: "Examiner",
+                Actor.candidate: "Candidate",
+            }.get(tp.actor, tp.actor.value)
+            text = turn_artifact.get(tp.id, "")
+            if text:
+                lines.append(f"{actor_label}: {text}")
+    return "\n".join(lines)

@@ -1,9 +1,9 @@
 """Phase 2.1 unit tests.
 
 Covers:
-  2.1.11 – Session with three problems: event ordering invariants,
+  2.1.11 - Session with three problems: event ordering invariants,
             projection correctness on ProblemIntroduced/ProblemClosed.
-  2.1.12 – Replay of a legacy Phase α session with StageEntered/StageCompleted
+  2.1.12 - Replay of a legacy Phase alpha session with StageEntered/StageCompleted
             events replays cleanly under the new orchestrator without errors.
 
 Tests are pure (no I/O): they build synthetic event logs in memory.
@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from core.domain import Dimension, Problem, ProblemId
+from core.domain import Actor, ArtifactKind, Dimension, Problem, ProblemId, TurnKind
 from core.eventlog import InMemoryEventLog
 from core.events import (
     ArtifactAttached,
@@ -28,11 +28,9 @@ from core.events import (
     StageEntered,
     TurnPosted,
 )
-from core.domain import Actor, ArtifactKind, TurnKind
 from core.problem_sequencer import EndSession, IntroduceNext, Noop, ProblemSequencer
 from core.projections import SessionStore, _ProblemStatus
 from core.session_boot import replay
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,7 +69,7 @@ def _append_seq(log: InMemoryEventLog, session_id: str, *payloads: object) -> No
 
 
 # ---------------------------------------------------------------------------
-# 2.1.1 — Problem dataclass construction
+# 2.1.1 - Problem dataclass construction
 # ---------------------------------------------------------------------------
 
 def test_problem_dataclass_fields():
@@ -92,7 +90,7 @@ def test_problem_default_fields():
 
 
 # ---------------------------------------------------------------------------
-# 2.1.2/3 — ProblemIntroduced / ProblemClosed event construction
+# 2.1.2/3 - ProblemIntroduced / ProblemClosed event construction
 # ---------------------------------------------------------------------------
 
 def test_problem_introduced_fields():
@@ -120,7 +118,7 @@ def test_problem_introduced_ordinal_ge_1():
 
 
 # ---------------------------------------------------------------------------
-# 2.1.4 — SessionStore projection with ProblemIntroduced / ProblemClosed
+# 2.1.4 - SessionStore projection with ProblemIntroduced / ProblemClosed
 # ---------------------------------------------------------------------------
 
 def test_session_store_tracks_first_problem_introduced():
@@ -210,7 +208,7 @@ def test_session_store_problem_introduced_is_idempotent_on_replay():
 
 
 # ---------------------------------------------------------------------------
-# 2.1.6 — FSM ordering invariants via ProblemSequencer
+# 2.1.6 - FSM ordering invariants via ProblemSequencer
 # ---------------------------------------------------------------------------
 
 def _record_with_status(statuses: dict[str, str], current: str | None) -> dict:
@@ -314,7 +312,7 @@ def test_sequencer_validate_close_rejects_already_closed():
 
 
 # ---------------------------------------------------------------------------
-# 2.1.12 — Replay of a legacy Phase α session (StageEntered/StageCompleted)
+# 2.1.12 - Replay of a legacy Phase alpha session (StageEntered/StageCompleted)
 # ---------------------------------------------------------------------------
 
 def test_legacy_stage_events_replay_cleanly():
@@ -344,12 +342,12 @@ def test_legacy_stage_events_replay_cleanly():
     )
 
     # Replay must not raise.
-    sessions, scores, signals, runtimes, artifacts = replay(sid, log)
+    sessions, _scores, _signals, _runtimes, _artifacts = replay(sid, log)
 
     rec = sessions.get(sid)
     assert rec is not None
     assert rec["ended"] is True
-    # No problem events in this log — projection must be empty.
+    # No problem events in this log - projection must be empty.
     assert rec["problems"] == []
     assert rec["current_problem_id"] is None
     assert rec["problem_status"] == {}
@@ -361,7 +359,9 @@ def test_legacy_stage_events_replay_cleanly():
 
 def test_legacy_session_replay_does_not_raise_on_stage_events_in_sqlite():
     """SQLite round-trip: StageEntered/StageCompleted rows survive serialise/deserialise."""
-    import tempfile, os
+    import os
+    import tempfile
+
     from adapters.eventlog.sqlite_log import SqliteEventLog
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
