@@ -492,6 +492,7 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     from adapters.tts.fallback_chain import FallbackChainTts
     from core.case_bank import CaseBank
     from core.domain import Dimension
+    from core.problem_bank import ProblemBank
 
     log = SqliteEventLog(db_path)
     router = get_model_router()
@@ -506,6 +507,10 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
 
     case_bank_path = _Path("templates") / "cases" / "cold_start_bank.yaml"
     case_bank = CaseBank.from_yaml(case_bank_path) if case_bank_path.exists() else None
+    problem_bank_path = _Path("templates") / "problem_banks" / "ds-ml-engineer-v1.yaml"
+    problem_bank = ProblemBank.from_yaml(problem_bank_path) if problem_bank_path.exists() else None
+    if problem_bank is not None:
+        problem_bank.prewarm_openers()
 
     runner = SessionRunner(
         challenger=LlmChallenger(router, case_bank=case_bank),
@@ -516,6 +521,7 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
             Dimension.insight_interp: LlmInsightInterpScorer(router),
         },
         aggregator=aggregator,
+        problem_bank=problem_bank,
         scored_dimensions=(
             Dimension.problem_framing,
             Dimension.model_rationale,

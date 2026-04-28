@@ -54,6 +54,7 @@ from core.orchestrator import (
     RequestScoring,
     next_action,
 )
+from core.problem_bank import ProblemBank
 from core.problem_sequencer import EndSession as SeqEndSession
 from core.problem_sequencer import IntroduceNext, ProblemSequencer
 from core.projections import ArtifactStore, RuntimeStore, ScoreStore, SessionStore, SignalStore
@@ -86,6 +87,7 @@ class SessionRunner:
     # When non-empty, ProblemSequencer drives problem boundaries instead of
     # the legacy StageEntered/StageCompleted FSM.
     problems: list[Problem] = field(default_factory=list)
+    problem_bank: ProblemBank | None = None
     # Legacy: kept for backward-compat with existing tests that pass a case;
     # StageEntered/StageCompleted are still emitted for analytics but the FSM
     # no longer branches on them when `problems` is set.
@@ -100,7 +102,8 @@ class SessionRunner:
     def advance(self, session_id: str, log: EventLog) -> RunResult:
         """Step the FSM until `RequestCandidateInput`, `EndSession`, or `NoAction`."""
         stage_seq = self.case.stages if self.case is not None else ()
-        sequencer = ProblemSequencer(self.problems) if self.problems else None
+        planned_problems = self._planned_problems(session_id)
+        sequencer = ProblemSequencer(planned_problems) if planned_problems else None
 
         for _ in range(_MAX_STEPS):
             sessions, scores, signals, runtimes, artifacts, stages = replay_with_stages(
@@ -204,6 +207,19 @@ class SessionRunner:
                 return RunResult(state="ended", session_id=session_id)
 
         return RunResult(state="no_op", session_id=session_id)
+
+
+    def _planned_problems(self, session_id: str) -> list[Problem]:
+        """Return the problem sequence for this session.
+
+        Explicit ``problems`` preserves test/backward-compatible injection. When
+        absent, Phase 2.3 draws a deterministic sequence from ``problem_bank``.
+        """
+        if self.problems:
+            return list(self.problems)
+        if self.problem_bank is None:
+            return []
+        return self.problem_bank.pick_sequence(session_id)
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
@@ -353,7 +369,7 @@ class SessionRunner:
             return
 
         # ── Build coverage context for examiner ──
-        problem_obj = _find_problem(self.problems, current_problem_id)
+        problem_obj = _find_problem(self._planned_problems(session_id), current_problem_id)
         thresholds = problem_obj.dim_thresholds if problem_obj else {}
         under_served = (
             tracker.under_served(ProblemId(current_problem_id), thresholds)

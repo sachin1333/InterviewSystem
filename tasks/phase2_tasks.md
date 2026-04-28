@@ -51,17 +51,17 @@ Order within each phase is the suggested execution order. Sub-phases run in the 
 
 ## Phase 2.3 — Problem bank
 
-- [ ] **2.3.1** [easy] Define problem-bank YAML schema: `id`, `opener`, `context`, `target_dimensions`, per-dim thresholds, `expected_duration_s`, `tags`.
-- [ ] **2.3.2** [medium] Add `core/problem_bank.py` with loader, schema validator, and a deterministic picker keyed off `session_id` hash.
-- [ ] **2.3.3** [medium] Author Problem 1 in `templates/problem_banks/ds-ml-engineer-v1.yaml` — framing & data-cleaning emphasis (weights `problem_framing`, `communication`).
-- [ ] **2.3.4** [medium] Author Problem 2 — model selection / rationale emphasis (`model_rationale`, `experiment_design`).
-- [ ] **2.3.5** [medium] Author Problem 3 — experimental design / A-B emphasis (`experiment_design`, `insight_interp`).
-- [ ] **2.3.6** [medium] Author Problem 4 — stakeholder communication emphasis (`communication`, `insight_interp`).
-- [ ] **2.3.7** [easy] Schema-validation tests: malformed bank entries fail loudly with actionable error messages.
-- [ ] **2.3.8** [medium] Wire `ProblemSequencer` to draw a 3–4 problem sequence from the bank at session start, balanced across rubric dims.
-- [ ] **2.3.9** [medium] Migrate `core/case_bank.py` first-prompt path to read openers from the problem bank for new sessions; keep `CaseBank` for legacy session replay only.
-- [ ] **2.3.10** [easy] Cold-start cache: pre-warm openers across the bank at app boot, target sub-500ms first-paint per opener.
-- [ ] **2.3.11** [easy] Picker fairness test: across 1000 synthetic `session_id`s, problem distribution is roughly uniform within tolerance.
+- [x] **2.3.1** [easy] Define problem-bank YAML schema: `id`, `opener`, `context`, `target_dimensions`, per-dim thresholds, `expected_duration_s`, `tags`.
+- [x] **2.3.2** [medium] Add `core/problem_bank.py` with loader, schema validator, and a deterministic picker keyed off `session_id` hash.
+- [x] **2.3.3** [medium] Author Problem 1 in `templates/problem_banks/ds-ml-engineer-v1.yaml` — framing & data-cleaning emphasis (weights `problem_framing`, `communication`).
+- [x] **2.3.4** [medium] Author Problem 2 — model selection / rationale emphasis (`model_rationale`, `experiment_design`).
+- [x] **2.3.5** [medium] Author Problem 3 — experimental design / A-B emphasis (`experiment_design`, `insight_interp`).
+- [x] **2.3.6** [medium] Author Problem 4 — stakeholder communication emphasis (`communication`, `insight_interp`).
+- [x] **2.3.7** [easy] Schema-validation tests: malformed bank entries fail loudly with actionable error messages.
+- [x] **2.3.8** [medium] Wire `ProblemSequencer` to draw a 3–4 problem sequence from the bank at session start, balanced across rubric dims.
+- [x] **2.3.9** [medium] Migrate `core/case_bank.py` first-prompt path to read openers from the problem bank for new sessions; keep `CaseBank` for legacy session replay only.
+- [x] **2.3.10** [easy] Cold-start cache: pre-warm openers across the bank at app boot, target sub-500ms first-paint per opener.
+- [x] **2.3.11** [easy] Picker fairness test: across 1000 synthetic `session_id`s, problem distribution is roughly uniform within tolerance.
 
 ## Phase 2.4 — UI continuous-chat + mode toggle
 

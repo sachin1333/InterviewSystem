@@ -1,0 +1,66 @@
+version: "1"
+problems:
+  - id: churn_framing_data_quality
+    opener: >
+      Enterprise churn rose from 1.2% to 4.0% over six months. What is the
+      first way you would frame the problem, and what data would you inspect
+      before proposing a model?
+    context: >
+      The interviewer should look for segmentation, retention-window clarity,
+      cohort definitions, instrumentation caveats, and a pragmatic first 72-hour
+      analysis plan. The candidate should not jump straight to a model without
+      defining churn, the business decision, and likely data quality risks.
+    target_dimensions: [problem_framing, communication]
+    dim_thresholds:
+      problem_framing: 0.74
+      communication: 0.62
+    expected_duration_s: 420
+    tags: [framing, data-cleaning, churn, enterprise-saas]
+
+  - id: model_selection_propensity
+    opener: >
+      A growth team wants a propensity model for upgrade likelihood in two
+      weeks. Which model family would you try first, and how would you justify
+      that choice against alternatives?
+    context: >
+      The interviewer should probe baseline choice, calibration, leakage,
+      interpretability, deployment constraints, feature freshness, and why a
+      simpler tabular model may beat a more complex neural approach for the v1.
+    target_dimensions: [model_rationale, experiment_design]
+    dim_thresholds:
+      model_rationale: 0.76
+      experiment_design: 0.62
+    expected_duration_s: 360
+    tags: [model-selection, propensity, baseline, tradeoffs]
+
+  - id: ab_pricing_interpretation
+    opener: >
+      A pricing-page experiment shows day-7 retention up 2.8% with p=0.04, but
+      14-day revenue per user is flat. How do you interpret the result, and what
+      would you check before recommending a launch?
+    context: >
+      The interviewer should probe metric hierarchy, guardrail metrics, power,
+      multiple comparisons, novelty effects, segment-level heterogeneity,
+      practical significance, and how to communicate uncertainty to a PM.
+    target_dimensions: [experiment_design, insight_interp]
+    dim_thresholds:
+      experiment_design: 0.74
+      insight_interp: 0.72
+    expected_duration_s: 360
+    tags: [experimentation, pricing, ab-test, interpretation]
+
+  - id: drift_stakeholder_communication
+    opener: >
+      A loan-approval model's AUC is stable, but approval rate dropped 6% over a
+      quarter. A PM says the model is broken. How would you investigate and
+      explain your findings by Friday?
+    context: >
+      The interviewer should probe distribution shift, policy/rule changes,
+      threshold changes, population mix, calibration, fairness considerations,
+      and crisp stakeholder communication under time pressure.
+    target_dimensions: [communication, insight_interp]
+    dim_thresholds:
+      communication: 0.76
+      insight_interp: 0.68
+    expected_duration_s: 360
+    tags: [stakeholder-communication, drift, model-monitoring, lending]
