@@ -434,7 +434,15 @@ class VoiceInterface {
     const details = document.querySelector('details[data-mode="text"]');
     if (details) { details.open = true; }
     const textarea = document.getElementById('answer');
-    if (textarea) { textarea.focus(); textarea.placeholder = 'Type your answer here'; }
+    const partial = document.getElementById('voice-transcript');
+    if (textarea) {
+      if (partial && partial.textContent.trim() && !textarea.value.trim()) {
+        textarea.value = partial.textContent;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      textarea.focus();
+      textarea.placeholder = 'Type your answer here';
+    }
     // Hide voice bar.
     const voiceBar = document.getElementById('voice-bar');
     if (voiceBar) { voiceBar.setAttribute('data-voice-mode', 'off'); }

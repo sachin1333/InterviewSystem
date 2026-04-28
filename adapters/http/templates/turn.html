@@ -6,88 +6,110 @@
   <link rel="stylesheet" href="/static/voice.css">
   <style>
     :root {
-      --bg: #f7f7f8;
-      --bubble-them: #ffffff;
-      --bubble-you: #2f6df5;
-      --bubble-you-text: #ffffff;
-      --border: #e3e3e6;
-      --text: #1a1a1a;
-      --muted: #6b6b70;
+      --bg: #f6f4ef;
+      --surface: #fffdf8;
+      --ink: #181714;
+      --muted: #74706a;
+      --line: #ded8cc;
+      --accent: #315cff;
+      --accent-soft: #e9eeff;
+      --them: #fffaf0;
+      --you: #1f2937;
+      --you-text: #fffaf0;
+      --shadow: 0 20px 50px rgba(31, 41, 55, 0.10);
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
-                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    .app { display: flex; flex-direction: column; height: 100vh; max-width: 760px; margin: 0 auto;
-           background: var(--bg); }
-    .header { padding: 0.9rem 1.2rem; border-bottom: 1px solid var(--border); background: #fff;
-              display: flex; justify-content: space-between; align-items: center; }
-    .header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
-    .header .meta { font-size: 0.8rem; color: var(--muted); }
-    .chat { flex: 1; overflow-y: auto; padding: 1.2rem; display: flex; flex-direction: column;
-            gap: 0.8rem; }
-    .msg { display: flex; max-width: 85%; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .app { height: 100svh; max-width: 920px; margin: 0 auto; display: flex; flex-direction: column;
+      background: linear-gradient(180deg, rgba(255,253,248,.92), rgba(246,244,239,.98)); }
+    .header { padding: 1rem 1.25rem .85rem; border-bottom: 1px solid var(--line); display: grid;
+      grid-template-columns: 1fr auto; gap: .8rem; align-items: center; background: rgba(255,253,248,.88);
+      backdrop-filter: blur(14px); }
+    .eyebrow { margin: 0 0 .15rem; color: var(--muted); font-size: .74rem; letter-spacing: .08em;
+      text-transform: uppercase; }
+    .header h1 { margin: 0; font-size: 1.1rem; line-height: 1.2; }
+    .problem-pill { display: inline-flex; align-items: center; gap: .45rem; margin-top: .45rem;
+      color: #24315f; background: var(--accent-soft); border: 1px solid #d8e0ff; border-radius: 999px;
+      padding: .34rem .62rem; font-size: .82rem; font-weight: 650; }
+    .meta { color: var(--muted); font-size: .78rem; margin-left: .4rem; }
+    .chat { flex: 1; overflow-y: auto; padding: 1.25rem; display: flex; flex-direction: column; gap: .9rem;
+      scroll-behavior: smooth; }
+    .msg { display: flex; max-width: min(82%, 680px); animation: rise .22s ease-out; }
     .msg.interviewer { align-self: flex-start; }
     .msg.candidate { align-self: flex-end; }
-    .bubble { padding: 0.7rem 0.95rem; border-radius: 1.1rem; line-height: 1.45;
-              white-space: pre-wrap; word-wrap: break-word; font-size: 0.95rem; }
-    .msg.interviewer .bubble { background: var(--bubble-them); color: var(--text);
-                               border: 1px solid var(--border); border-bottom-left-radius: 0.3rem; }
-    .msg.candidate .bubble { background: var(--bubble-you); color: var(--bubble-you-text);
-                             border-bottom-right-radius: 0.3rem; }
-    .role { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.2rem;
-            text-transform: uppercase; letter-spacing: 0.04em; }
-    .composer { border-top: 1px solid var(--border); background: #fff; padding: 0.8rem 1rem;
-                display: flex; flex-direction: column; gap: 0.5rem; }
-    .composer textarea { width: 100%; resize: none; border: 1px solid var(--border);
-                         border-radius: 0.7rem; padding: 0.6rem 0.8rem; font-size: 0.95rem;
-                         font-family: inherit; min-height: 56px; max-height: 220px; outline: none; }
-    .composer textarea:focus { border-color: var(--bubble-you); }
-    .composer .row { display: flex; gap: 0.6rem; align-items: flex-end; }
-    .composer .row textarea { flex: 1; }
-    .composer button { background: var(--bubble-you); color: #fff; border: 0;
-                       border-radius: 0.7rem; padding: 0.6rem 1.1rem; font-size: 0.95rem;
-                       cursor: pointer; font-weight: 500; }
-    .composer button:hover { filter: brightness(1.05); }
-    .code-toggle { font-size: 0.8rem; color: var(--muted); background: none; border: 0;
-                   cursor: pointer; padding: 0; align-self: flex-start; text-decoration: underline;
-                   margin-top: -0.2rem; }
+    .bubble { padding: .78rem 1rem; border-radius: 1.12rem; line-height: 1.5; white-space: pre-wrap;
+      overflow-wrap: anywhere; font-size: .96rem; box-shadow: 0 1px 0 rgba(0,0,0,.03); }
+    .msg.interviewer .bubble { background: var(--them); border: 1px solid var(--line); border-bottom-left-radius: .35rem; }
+    .msg.candidate .bubble { background: var(--you); color: var(--you-text); border-bottom-right-radius: .35rem; }
+    .role { font-size: .7rem; color: var(--muted); margin-bottom: .24rem; text-transform: uppercase;
+      letter-spacing: .07em; font-weight: 700; }
+    .problem-divider { align-self: stretch; display: flex; align-items: center; gap: .75rem; color: var(--muted);
+      font-size: .78rem; letter-spacing: .02em; margin: .35rem 0 .1rem; }
+    .problem-divider::before, .problem-divider::after { content: ""; height: 1px; background: var(--line); flex: 1; }
+    .problem-divider span { border: 1px solid var(--line); background: rgba(255,253,248,.9); border-radius: 999px;
+      padding: .34rem .7rem; }
+    .empty { color: var(--muted); text-align: center; margin-top: 2rem; }
+    .composer-shell { border-top: 1px solid var(--line); background: rgba(255,253,248,.95); box-shadow: var(--shadow); }
+    .composer-shell summary { display: none; }
+    .composer { padding: .9rem 1rem 1rem; display: flex; flex-direction: column; gap: .55rem; }
+    .composer .row { display: grid; grid-template-columns: auto 1fr auto; gap: .55rem; align-items: end; }
+    .composer textarea { width: 100%; resize: none; border: 1px solid var(--line); border-radius: .9rem;
+      padding: .72rem .86rem; font: inherit; min-height: 58px; max-height: 220px; outline: none; background: #fff; }
+    .composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(49,92,255,.12); }
+    .send-btn, .composer-mic { border: 0; border-radius: .82rem; padding: .72rem .98rem; font-weight: 750; cursor: pointer; }
+    .send-btn { background: var(--accent); color: white; }
+    .composer-mic { color: var(--accent); background: var(--accent-soft); border: 1px solid #d8e0ff; }
+    .code-toggle { font-size: .8rem; color: var(--muted); background: none; border: 0; cursor: pointer;
+      padding: 0; align-self: flex-start; text-decoration: underline; }
     .code-area { display: none; }
     .code-area.open { display: block; }
-    .code-area textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-                          font-size: 0.85rem; min-height: 120px; }
-    .empty { color: var(--muted); font-size: 0.9rem; text-align: center; margin-top: 2rem; }
+    .code-area textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86rem; min-height: 120px; }
+    .thinking { color: var(--muted); font-style: italic; }
+    @keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 640px) {
+      .header { grid-template-columns: 1fr; }
+      .msg { max-width: 94%; }
+      .composer .row { grid-template-columns: 1fr auto; }
+      .composer-mic { grid-column: 1 / -1; }
+    }
   </style>
 </head>
 <body>
   <div class="app" data-voice-enabled="{{ 'true' if voice_mode else 'false' }}" data-active-mode="{{ active_mode }}">
-    <div class="header">
-      <h1>Interview</h1>
-      <span class="meta">{{ turn_kind }} · {{ session_id }}</span>
+    <header class="header">
+      <div>
+        <p class="eyebrow">Interview workspace</p>
+        <h1>Continuous chat <span class="meta">{{ turn_kind }} · {{ session_id }}</span></h1>
+        {% if problem_progress %}<div class="problem-pill" aria-live="polite">{{ problem_progress }}</div>{% endif %}
+      </div>
       {% if voice_mode and allow_text_switch %}
-      <div class="mode-toggle">
-        <button id="btn-use-voice" class="mode-btn{{ ' active' if active_mode == 'voice' else '' }}">🎤 Voice</button>
-        <button id="btn-use-text"  class="mode-btn{{ ' active' if active_mode == 'text'  else '' }}">⌨ Text</button>
+      <div class="mode-toggle" role="group" aria-label="Input mode">
+        <button type="button" id="btn-use-voice" class="mode-btn{{ ' active' if active_mode == 'voice' else '' }}" aria-label="Switch to voice input">🎤 Voice</button>
+        <button type="button" id="btn-use-text"  class="mode-btn{{ ' active' if active_mode == 'text'  else '' }}" aria-label="Switch to text input">⌨ Text</button>
       </div>
       {% endif %}
-    </div>
+    </header>
 
-    <div class="chat" id="chat">
-      {% if not messages %}
-        <div class="empty">Waiting for the interviewer…</div>
-      {% endif %}
+    <main class="chat" id="chat" aria-live="polite" aria-label="Interview conversation">
+      {% if not messages %}<div class="empty">Waiting for the interviewer…</div>{% endif %}
       {% for m in messages %}
-        <div class="msg {{ m.role }}">
-          <div>
-            <div class="role">{{ "Interviewer" if m.role == "interviewer" else "You" }}</div>
-            <div class="bubble">{{ m.text }}</div>
+        {% if m.role == 'boundary' %}
+          <div class="problem-divider" role="separator" aria-label="{{ m.text }}"><span>{{ m.text }}</span></div>
+        {% else %}
+          <div class="msg {{ m.role }}">
+            <div>
+              <div class="role">{{ "Interviewer" if m.role == "interviewer" else "You" }}</div>
+              <div class="bubble">{{ m.text }}</div>
+            </div>
           </div>
-        </div>
+        {% endif %}
       {% endfor %}
       {% if probe_pending %}
       <div class="msg interviewer" id="probe-streaming">
         <div>
           <div class="role">Interviewer</div>
-          <div class="bubble" id="probe-stream-text">…</div>
+          <div class="bubble thinking" id="probe-stream-text" aria-live="polite">Thinking…</div>
         </div>
       </div>
       <script>
@@ -98,6 +120,7 @@
         es.onmessage = (e) => {
           if (e.data === "[DONE]") { es.close(); return; }
           buf += e.data;
+          target.classList.remove('thinking');
           target.textContent = buf;
           document.getElementById('chat').scrollTop = 1e9;
         };
@@ -105,49 +128,36 @@
       })();
       </script>
       {% endif %}
-    </div>
+    </main>
 
-    <details data-mode="text" {% if active_mode == 'text' %}open{% endif %}>
+    <details class="composer-shell" data-mode="text" {% if active_mode == 'text' %}open{% endif %}>
+      <summary>Answer composer</summary>
       <form class="composer" method="post" action="/sessions/{{ session_id }}/turn" id="composer">
         <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
         <div class="row">
-          <textarea id="answer" name="answer" rows="2" autofocus
+          {% if voice_mode %}<button type="button" id="composer-mic-toggle" class="composer-mic" aria-label="Switch to voice input">🎤</button>{% endif %}
+          <textarea id="answer" name="answer" rows="2" autofocus aria-label="Answer input"
             placeholder="{% if turn_kind == 'defense' %}Respond to the follow-up…{% else %}Type your answer…{% endif %}"></textarea>
-          <button type="submit">Send</button>
+          <button type="submit" class="send-btn" aria-label="Send answer">Send</button>
         </div>
-        <button type="button" class="code-toggle" onclick="document.getElementById('code-wrap').classList.toggle('open')">
+        <button type="button" class="code-toggle" aria-expanded="false" onclick="document.getElementById('code-wrap').classList.toggle('open'); this.setAttribute('aria-expanded', document.getElementById('code-wrap').classList.contains('open'))">
           + add code
         </button>
         <div class="code-area" id="code-wrap">
-          <textarea id="code" name="code" rows="6"
-            placeholder="# Optional Python code (will be executed)"></textarea>
+          <textarea id="code" name="code" rows="6" aria-label="Optional Python code" placeholder="# Optional Python code (will be executed)"></textarea>
         </div>
       </form>
     </details>
 
-    <div
-      id="voice-bar"
-      class="voice-bar"
-      data-voice-mode="{{ 'on' if (voice_mode and active_mode == 'voice') else 'off' }}"
-      data-voice-policy="{{ voice_mode_setting }}"
-      data-allow-text-switch="{{ 'true' if allow_text_switch else 'false' }}"
-    >
-      <button
-        type="button"
-        id="mic-btn"
-        class="mic-btn"
-        data-mic="ptt"
-      >🎤 Hold to speak</button>
-      <div id="voice-transcript" class="voice-transcript"></div>
+    <div id="voice-bar" class="voice-bar" data-voice-mode="{{ 'on' if (voice_mode and active_mode == 'voice') else 'off' }}" data-voice-policy="{{ voice_mode_setting }}" data-allow-text-switch="{{ 'true' if allow_text_switch else 'false' }}">
+      <button type="button" id="mic-btn" class="mic-btn" data-mic="ptt" aria-label="Hold to speak">🎤 Hold to speak</button>
+      <div id="voice-transcript" class="voice-transcript" aria-live="polite"></div>
     </div>
   </div>
 
   <script>
-    // Auto-scroll chat to bottom on load.
     const chat = document.getElementById('chat');
     chat.scrollTop = chat.scrollHeight;
-
-    // Submit on Enter, newline on Shift+Enter.
     const answer = document.getElementById('answer');
     const composer = document.getElementById('composer');
     answer.addEventListener('keydown', (e) => {
@@ -156,12 +166,17 @@
         if (answer.value.trim()) composer.submit();
       }
     });
-
-    // Auto-grow textarea.
     answer.addEventListener('input', () => {
       answer.style.height = 'auto';
       answer.style.height = Math.min(answer.scrollHeight, 220) + 'px';
     });
+    const composerMic = document.getElementById('composer-mic-toggle');
+    if (composerMic) {
+      composerMic.addEventListener('click', () => {
+        document.cookie = 'interview_mode=voice; path=/';
+        window.location.reload();
+      });
+    }
   </script>
 
   <script>window.SESSION_ID = "{{ session_id }}";</script>

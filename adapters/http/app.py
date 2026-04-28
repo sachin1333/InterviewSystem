@@ -34,7 +34,14 @@ from adapters.http.voice_protocol import (
 )
 from core.contracts import EventLog
 from core.domain import Actor, ArtifactKind, TurnKind
-from core.events import ArtifactAttached, CandidateJoined, Envelope, SessionStarted, TurnPosted
+from core.events import (
+    ArtifactAttached,
+    CandidateJoined,
+    Envelope,
+    ProblemIntroduced,
+    SessionStarted,
+    TurnPosted,
+)
 from core.pack_loader import PackRegistry
 from core.primitives import Primitive
 from core.session_boot import replay
@@ -55,26 +62,77 @@ def _last_interviewer_has_text(messages: list[dict[str, str]]) -> bool:
 
 
 def _conversation_messages(session_id: str, log: EventLog) -> list[dict[str, str]]:
-    """Build an ordered list of {role, text} messages for the chat view."""
+    """Build ordered chat rows, including problem-boundary dividers."""
     sessions, _, _, _, artifacts = replay(session_id, log)
     s = sessions.get(session_id)
     if s is None:
         return []
+
+    turn_by_id = {turn["id"]: turn for turn in s["turns"]}
+    artifacts_by_turn: dict[str, list[str]] = {}
+    for aid, tid in s["artifact_turn"].items():
+        body = artifacts.get(aid)
+        if body:
+            artifacts_by_turn.setdefault(tid, []).append(body)
+
     out: list[dict[str, str]] = []
-    for turn in s["turns"]:
-        role = "interviewer" if turn["actor"] in (Actor.challenger, Actor.examiner) else "candidate"
-        # Concatenate all artifacts produced by this turn (usually one).
-        chunks: list[str] = []
-        for aid, tid in s["artifact_turn"].items():
-            if tid != turn["id"]:
+    for env in log.get_session(session_id):
+        payload = env.payload
+        if isinstance(payload, ProblemIntroduced):
+            out.append({
+                "role": "boundary",
+                "text": f"Problem {payload.ordinal}: {payload.opener_text}",
+            })
+        elif isinstance(payload, TurnPosted):
+            chunks = artifacts_by_turn.get(payload.id, [])
+            if not chunks:
                 continue
-            body = artifacts.get(aid)
-            if body:
-                chunks.append(body)
-        if not chunks:
-            continue
-        out.append({"role": role, "text": "\n\n".join(chunks)})
+            turn = turn_by_id.get(payload.id)
+            actor = payload.actor if turn is None else turn["actor"]
+            role = "interviewer" if actor in (Actor.challenger, Actor.examiner) else "candidate"
+            out.append({"role": role, "text": "\n\n".join(chunks)})
     return out
+
+
+def _problem_progress(session_id: str, log: EventLog, runner: SessionRunner) -> str | None:
+    """Return candidate-facing problem progress like 'Problem 2 of 3'."""
+    sessions, _, _, _, _ = replay(session_id, log)
+    record = sessions.get(session_id)
+    if record is None:
+        return None
+
+    current_id = record["current_problem_id"]
+    last_ordinal: int | None = None
+    current_ordinal: int | None = None
+    for env in log.get_session(session_id):
+        payload = env.payload
+        if isinstance(payload, ProblemIntroduced):
+            last_ordinal = payload.ordinal
+            if current_id is not None and payload.problem_id == current_id:
+                current_ordinal = payload.ordinal
+    ordinal = current_ordinal or last_ordinal
+    if ordinal is None:
+        return None
+
+    planned_total = len(runner.problems)
+    if planned_total == 0 and runner.problem_bank is not None:
+        planned_total = len(runner.problem_bank.pick_sequence(session_id))
+    total = max(planned_total, ordinal)
+    return f"Problem {ordinal} of {total}"
+
+
+def _probe_stream_pending(session_id: str, log: EventLog) -> bool:
+    """True when the latest examiner probe turn has no rendered text yet."""
+    sessions, _, _, _, _ = replay(session_id, log)
+    s = sessions.get(session_id)
+    if s is None:
+        return False
+    for turn in reversed(s["turns"]):
+        if turn["actor"] == Actor.candidate:
+            return False
+        if turn["actor"] == Actor.examiner and turn["kind"] == TurnKind.probe:
+            return not any(tid == turn["id"] for tid in s["artifact_turn"].values())
+    return False
 
 
 def make_app(
@@ -169,9 +227,10 @@ def make_app(
         turn_kind = (result.turn_kind or TurnKind.answer).value
         messages = _conversation_messages(session_id, _log)
         probe_pending = (
-            result.turn_kind == TurnKind.defense
-            and not _last_interviewer_has_text(messages)
+            _probe_stream_pending(session_id, _log)
+            or (result.turn_kind == TurnKind.defense and not _last_interviewer_has_text(messages))
         )
+        problem_progress = _problem_progress(session_id, _log, _runner)
 
         # Determine active input mode from cookie (voice sessions only).
         voice_on = app.state.voice_mode != "off"
@@ -191,6 +250,7 @@ def make_app(
             "allow_text_switch": app.state.voice_mode == "on",
             "active_mode": active_mode,
             "probe_pending": probe_pending,
+            "problem_progress": problem_progress,
         })
 
     # ------------------------------------------------------------------ #

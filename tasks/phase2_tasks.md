@@ -65,16 +65,16 @@ Order within each phase is the suggested execution order. Sub-phases run in the 
 
 ## Phase 2.4 — UI continuous-chat + mode toggle
 
-- [ ] **2.4.1** [easy] Strip stage-progress chrome from `templates/turn.html` (and any partials that render stage indicators).
-- [ ] **2.4.2** [easy] Add a soft "Problem N of M" header that updates on `ProblemIntroduced` events.
-- [ ] **2.4.3** [medium] Render the full conversation as a bubble thread, newest-bottom, full-history scroll; reuse the θ.2 EventSource bubble component.
-- [ ] **2.4.4** [easy] Persistent text input pinned to the bottom of the chat; `Enter` submits, `Shift+Enter` newline.
-- [ ] **2.4.5** [medium] Mic toggle button next to text input; pressing it opens the WS voice session for the next answer (and persists until toggled back).
-- [ ] **2.4.6** [medium] Mid-answer mode switch: handle `ClientModeSwitch` from voice→text without losing partial transcript state.
-- [ ] **2.4.7** [easy] "Thinking…" affordance shown while waiting for the first SSE token of the next question.
-- [ ] **2.4.8** [easy] Verify streaming probe paint still works inside the new chat layout (regression check on θ.2 behavior).
-- [ ] **2.4.9** [easy] Problem-boundary visual: subtle divider in the thread when a new problem is introduced.
-- [ ] **2.4.10** [medium] Accessibility pass: keyboard nav, screen-reader announcement on new question, ARIA labels on mic toggle, focus management across mode switch.
+- [x] **2.4.1** [easy] Strip stage-progress chrome from `templates/turn.html` (and any partials that render stage indicators).
+- [x] **2.4.2** [easy] Add a soft "Problem N of M" header that updates on `ProblemIntroduced` events.
+- [x] **2.4.3** [medium] Render the full conversation as a bubble thread, newest-bottom, full-history scroll; reuse the θ.2 EventSource bubble component.
+- [x] **2.4.4** [easy] Persistent text input pinned to the bottom of the chat; `Enter` submits, `Shift+Enter` newline.
+- [x] **2.4.5** [medium] Mic toggle button next to text input; pressing it opens the WS voice session for the next answer (and persists until toggled back).
+- [x] **2.4.6** [medium] Mid-answer mode switch: handle `ClientModeSwitch` from voice→text without losing partial transcript state.
+- [x] **2.4.7** [easy] "Thinking…" affordance shown while waiting for the first SSE token of the next question.
+- [x] **2.4.8** [easy] Verify streaming probe paint still works inside the new chat layout (regression check on θ.2 behavior).
+- [x] **2.4.9** [easy] Problem-boundary visual: subtle divider in the thread when a new problem is introduced.
+- [x] **2.4.10** [medium] Accessibility pass: keyboard nav, screen-reader announcement on new question, ARIA labels on mic toggle, focus management across mode switch.
 - [ ] **2.4.11** [hard] End-to-end browser test: candidate completes three problems, switches input mode mid-session, transcript and event log remain consistent.
 
 ## Phase 2.5 — Latency: challenger streaming + probe-context prefetch
