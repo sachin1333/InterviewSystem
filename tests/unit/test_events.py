@@ -39,6 +39,7 @@ from core.events import (
     TierFallback,
     TurnPosted,
     TurnRequested,
+    TurnTimingObserved,
 )
 
 UTC = UTC
@@ -103,6 +104,19 @@ def test_session_timed_out_carries_timeout_kind():
     assert t.reason == "idle"
 
 
+def test_turn_timing_observed_carries_ordered_server_checkpoints():
+    timing = TurnTimingObserved(
+        turn_id="t1",
+        phase="challenger_opener",
+        submit_received_ms=0,
+        context_assembled_ms=3,
+        first_token_ms=3,
+        first_paint_ms=4,
+    )
+
+    assert timing.first_paint_ms >= timing.first_token_ms
+
+
 def test_event_types_registry_covers_all_payloads():
     expected = {
         # lifecycle
@@ -118,7 +132,7 @@ def test_event_types_registry_covers_all_payloads():
         # adapter failures
         ChallengerFailed, ExaminerFailed, ScorerFailed,
         # voice
-        SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved,
+        SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved, TurnTimingObserved,
         # pacing
         CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
         # intake / override

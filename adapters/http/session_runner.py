@@ -5,6 +5,7 @@ Called once per HTTP request (stateless: replays log at each step).
 """
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -41,6 +42,7 @@ from core.events import (
     StageCompleted,
     StageEntered,
     TurnPosted,
+    TurnTimingObserved,
 )
 from core.orchestrator import (
     DEFAULT_SCORED_DIMENSIONS,
@@ -247,7 +249,9 @@ class SessionRunner:
         self, session_id: str, log: EventLog, action: IntroduceNext
     ) -> None:
         """Emit ``ProblemIntroduced`` and a challenger turn with the opener text."""
+        started = time.monotonic()
         problem = action.problem
+        context_assembled_ms = _elapsed_ms(started)
         self._append(
             session_id, log,
             ProblemIntroduced(
@@ -268,6 +272,15 @@ class SessionRunner:
             produced_by_turn_id=turn_id,
             version=1,
             content=problem.opener_text,
+        ))
+        first_paint_ms = _elapsed_ms(started)
+        self._append(session_id, log, TurnTimingObserved(
+            turn_id=turn_id,
+            phase="challenger_opener",
+            submit_received_ms=0,
+            context_assembled_ms=context_assembled_ms,
+            first_token_ms=context_assembled_ms,
+            first_paint_ms=first_paint_ms,
         ))
 
     def _do_close_problem(
@@ -348,6 +361,7 @@ class SessionRunner:
         6. Fallback (no examiner, or failure) → post a probe turn with no text
            so the orchestrator's probe budget still drains.
         """
+        started = time.monotonic()
         sessions, _, _, _, _ = _replay_minimal(session_id, log)
         s = sessions.get(session_id)
         current_problem_id: str | None = s["current_problem_id"] if s else None
@@ -389,6 +403,7 @@ class SessionRunner:
             max_probes=self.max_probes_per_problem,
             problem_transcript=transcript,
         )
+        context_assembled_ms = _elapsed_ms(started)
 
         # ── Ask examiner ──
         failure: ExaminerFailed | None = None
@@ -416,6 +431,7 @@ class SessionRunner:
             probe_text: str | None = outcome.probe_text if not outcome.ok_to_advance else None
         else:
             probe_text = None
+        first_token_ms = _elapsed_ms(started) if probe_text else context_assembled_ms
 
         # ── Post probe turn ──
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
@@ -433,6 +449,14 @@ class SessionRunner:
             ))
         if failure is not None:
             self._append(session_id, log, failure)
+        self._append(session_id, log, TurnTimingObserved(
+            turn_id=turn_id,
+            phase="examiner_probe",
+            submit_received_ms=0,
+            context_assembled_ms=context_assembled_ms,
+            first_token_ms=first_token_ms,
+            first_paint_ms=_elapsed_ms(started),
+        ))
 
     def _do_execution(
         self,
@@ -545,6 +569,10 @@ class SessionRunner:
 # ------------------------------------------------------------------ #
 #  Module-level helpers (pure, no class dependency)                  #
 # ------------------------------------------------------------------ #
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1000))
+
 
 def _replay_minimal(
     session_id: str,

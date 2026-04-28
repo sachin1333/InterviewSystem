@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -41,6 +42,7 @@ from core.events import (
     ProblemIntroduced,
     SessionStarted,
     TurnPosted,
+    TurnTimingObserved,
 )
 from core.pack_loader import PackRegistry
 from core.primitives import Primitive
@@ -264,6 +266,7 @@ def make_app(
         code: Annotated[str, Form()] = "",
         turn_nonce: Annotated[str, Form()] = "",
     ) -> RedirectResponse:
+        started = time.monotonic()
         _log: EventLog = app.state.log
         now = datetime.now(UTC)
 
@@ -280,6 +283,7 @@ def make_app(
             if last_system is not None and last_system["kind"] == TurnKind.probe
             else TurnKind.answer
         )
+        context_assembled_ms = max(0, int((time.monotonic() - started) * 1000))
 
         nonce = turn_nonce or uuid.uuid4().hex
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
@@ -337,6 +341,26 @@ def make_app(
                 ),
                 f"{nonce}-code",
             )
+
+        first_paint_ms = max(0, int((time.monotonic() - started) * 1000))
+        seq = (_log.last_seq(session_id) or 0) + 1
+        _log.append(
+            Envelope(
+                session_id=session_id,
+                seq=seq,
+                at=now,
+                payload=TurnTimingObserved(
+                    turn_id=turn_id,
+                    phase="candidate_submit",
+                    submit_received_ms=0,
+                    context_assembled_ms=context_assembled_ms,
+                    first_token_ms=context_assembled_ms,
+                    first_paint_ms=first_paint_ms,
+                ),
+                idem_key=f"{nonce}-timing",
+            ),
+            f"{nonce}-timing",
+        )
 
         return RedirectResponse(f"/sessions/{session_id}", status_code=303)
 

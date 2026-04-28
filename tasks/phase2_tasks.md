@@ -84,7 +84,7 @@ Order within each phase is the suggested execution order. Sub-phases run in the 
 - [ ] **2.5.3** [medium] Background task — transcript summarization for the active problem (heuristic for short transcripts, cheap LLM call when length crosses threshold).
 - [ ] **2.5.4** [easy] Background task — coverage diff pre-staged so the probe call only needs the model invocation.
 - [ ] **2.5.5** [medium] Cache the prefetched context per turn; invalidate on candidate-submit only if the answer changed materially since prefetch (length delta + content hash).
-- [ ] **2.5.6** [medium] Timing instrumentation: emit per-turn events with `submit_received_ms`, `context_assembled_ms`, `first_token_ms`, `first_paint_ms`.
+- [x] **2.5.6** [medium] Timing instrumentation: emit per-turn events with `submit_received_ms`, `context_assembled_ms`, `first_token_ms`, `first_paint_ms`.
 - [ ] **2.5.7** [medium] Timing dashboard: aggregate the timing events, render p50/p95 per stage, threshold-alert on regression beyond budget.
 - [ ] **2.5.8** [medium] Load test: 20-turn synthetic session must hit p50 ≤ 800ms and p95 ≤ 1500ms; failing the budget fails the test.
 - [ ] **2.5.9** [medium] Cold-path fallback: if prefetch fails or is stale, the hot path still works and the candidate sees no error.

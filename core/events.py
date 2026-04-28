@@ -158,6 +158,22 @@ class LatencyObserved(_Evt):
     end_to_end_ms: int = Field(ge=0)
 
 
+class TurnTimingObserved(_Evt):
+    """Server-side timing checkpoints for one conversational turn (Phase 2.5).
+
+    Values are milliseconds elapsed from the server receiving work for the
+    turn. Cached paths use equal checkpoints; streaming paths can set
+    ``first_token_ms`` independently from ``first_paint_ms``.
+    """
+
+    turn_id: str
+    phase: Literal["candidate_submit", "challenger_opener", "examiner_probe"]
+    submit_received_ms: int = Field(ge=0)
+    context_assembled_ms: int = Field(ge=0)
+    first_token_ms: int = Field(ge=0)
+    first_paint_ms: int = Field(ge=0)
+
+
 # --- candidate behavior / pacing -----------------------------------------
 
 class CandidateIdle(_Evt):
@@ -260,7 +276,7 @@ EVENT_TYPES: set[type] = {
     # adapter failures
     ChallengerFailed, ExaminerFailed, ScorerFailed,
     # voice
-    SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved,
+    SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved, TurnTimingObserved,
     # pacing
     CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
     # intake / override
