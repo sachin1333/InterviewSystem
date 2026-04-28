@@ -1,5 +1,10 @@
 # Orchestrator FSM Invariants
 
+> **Phase 2.1 status:** Problem-based FSM is live. Stage events (`StageEntered` /
+> `StageCompleted`) are **legacy / replay-only** — they are still emitted for
+> analytics on old sessions but the hot-path FSM no longer branches on them.
+> See the _Problem-boundary contract_ section below for the new invariants.
+
 Pure function contract: `next_action(session_id, sessions, scores, policy) -> Action`.
 
 **Zero I/O.** Table-driven. Given projection snapshot, deterministic single `Action` returned.
@@ -73,3 +78,57 @@ Every row 1-13 has a `tests/unit/test_invariants.py::test_row_N` that:
 3. Asserts `next_action()` is pure (calling twice returns equal result).
 
 Forbidden-transition tests live in `tests/unit/test_eventlog.py` and `tests/unit/test_events.py`.
+
+---
+
+## Problem-boundary contract (Phase 2.1)
+
+`ProblemSequencer` drives problem boundaries. Pure function; no I/O.
+
+### New event types
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `ProblemIntroduced` | `problem_id`, `opener_text`, `ordinal` | Examiner presents new problem; challenger posts opener text as a `TurnPosted(challenger, question)` in the same step |
+| `ProblemClosed` | `problem_id`, `reason`, `rationale` | Examiner declares problem done; `reason` ∈ `{coverage_saturated, time_capped, examiner_pivot, max_probes}` |
+
+### Ordering invariants
+
+1. **Introduce before turn** — `ProblemIntroduced(N)` must precede any `TurnPosted` for that problem.
+2. **Close before next introduce** — `ProblemClosed(N)` must precede `ProblemIntroduced(N+1)`.
+3. **End after last close** — `SessionEnded` follows the last `ProblemClosed`; never fires while a problem is active.
+4. **No double-introduce** — `ProblemIntroduced` for an already-introduced `problem_id` is rejected by `ProblemSequencer.validate_introduce`.
+5. **No double-close** — `ProblemClosed` for an already-closed or never-introduced `problem_id` is rejected by `ProblemSequencer.validate_close`.
+
+### Projection state
+
+`SessionStore` now tracks per-session:
+- `problems: list[Problem]` — problems introduced so far (append-only, idempotent).
+- `current_problem_id: ProblemId | None` — set on `ProblemIntroduced`, cleared on `ProblemClosed`.
+- `problem_status: dict[ProblemId, _ProblemStatus]` — `active` or `closed`.
+
+### Legacy / backward-compat
+
+- Sessions created before Phase 2.1 (Phases α–θ) have no `ProblemIntroduced`/`ProblemClosed` events. Their `problems`, `current_problem_id`, and `problem_status` fields are empty/`None`. They replay cleanly.
+- `StageEntered` / `StageCompleted` are still registered in `EVENT_TYPES` and survive SQLite round-trips. `SessionRunner` only executes the legacy stage branch when `problems` list is empty.
+
+### Sequencer action table
+
+| Condition | Action |
+|---|---|
+| `problems` list empty | `Noop(reason="no_problems_planned")` |
+| Active problem in flight (`current_problem_id` non-null, status `active`) | `Noop(reason="problem_active")` |
+| Next un-introduced problem exists | `IntroduceNext(problem, ordinal)` |
+| All planned problems closed | `EndSession` |
+| All introduced but some not yet closed | `Noop(reason="awaiting_close")` |
+
+### Test obligations
+
+`tests/unit/test_problem_domain.py` covers:
+- `Problem` dataclass construction and defaults.
+- `ProblemIntroduced` / `ProblemClosed` field validation.
+- `SessionStore` projection for single-problem, multi-problem, and idempotent replay scenarios.
+- All five `ProblemSequencer` action paths.
+- All `validate_introduce` / `validate_close` error cases.
+- Legacy Phase α session replay (stage events only) — projection correct, no errors.
+- SQLite round-trip with mixed legacy + Phase 2.1 events.

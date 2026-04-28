@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import TypedDict
 
 from core.case_loader import CaseStage
-from core.domain import Actor, ArtifactKind, Dimension, Score, TurnKind
+from core.domain import Actor, ArtifactKind, Dimension, Problem, ProblemId, Score, TurnKind
 from core.events import (
     ArtifactAttached,
     Envelope,
+    ProblemClosed,
+    ProblemIntroduced,
     RuntimeExecuted,
     RuntimeFailed,
     ScoreComputed,
@@ -28,6 +31,11 @@ class TurnInfo(TypedDict):
     seq: int
 
 
+class _ProblemStatus(StrEnum):
+    active = "active"
+    closed = "closed"
+
+
 class _SessionRecord(TypedDict):
     pack_id: str
     rubric_version: str | None
@@ -43,6 +51,10 @@ class _SessionRecord(TypedDict):
     # artifact lookups
     artifact_kind: dict[str, ArtifactKind]
     artifact_turn: dict[str, str]
+    # Phase 2.1 — problem tracking
+    problems: list[Problem]
+    current_problem_id: ProblemId | None
+    problem_status: dict[ProblemId, _ProblemStatus]
 
 
 def _new_record() -> _SessionRecord:
@@ -58,6 +70,9 @@ def _new_record() -> _SessionRecord:
         artifact_ids=(),
         artifact_kind={},
         artifact_turn={},
+        problems=[],
+        current_problem_id=None,
+        problem_status={},
     )
 
 
@@ -93,6 +108,29 @@ class SessionStore:
         elif isinstance(payload, SessionEnded):
             b = self._bucket(sid)
             b["ended"] = True
+        elif isinstance(payload, ProblemIntroduced):
+            b = self._bucket(sid)
+            pid = payload.problem_id
+            # Guard: only add to list if this problem_id hasn't been seen yet
+            # (idempotent replay).
+            if not any(p.id == pid for p in b["problems"]):
+                from core.domain import Problem  # local import avoids circular at module level
+                b["problems"].append(
+                    Problem(
+                        id=pid,
+                        opener_text=payload.opener_text,
+                    )
+                )
+            b["current_problem_id"] = pid
+            b["problem_status"][pid] = _ProblemStatus.active
+        elif isinstance(payload, ProblemClosed):
+            b = self._bucket(sid)
+            pid = payload.problem_id
+            b["problem_status"][pid] = _ProblemStatus.closed
+            # Clear current_problem_id; ProblemSequencer will set it again
+            # via the next ProblemIntroduced event.
+            if b["current_problem_id"] == pid:
+                b["current_problem_id"] = None
 
     def get(self, session_id: str) -> _SessionRecord | None:
         return self._sessions.get(session_id)

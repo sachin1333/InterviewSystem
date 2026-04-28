@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "interview-system"
 version = "0.0.1"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
   "pydantic>=2.5",
   "pyyaml>=6.0",
@@ -21,7 +21,7 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["core", "adapters", "tools"]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "pytest>=8",
   "pytest-cov>=5",

@@ -5,10 +5,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from typing import Literal
+
 from core.domain import (
     Actor,
     ArtifactKind,
     Dimension,
+    ProblemId,
     Score,
     Signal,
     TurnKind,
@@ -198,6 +201,40 @@ class StageCompleted(_Evt):
     stage_id: str
 
 
+# --- Phase 2.1: problem boundary events ----------------------------------
+
+class ProblemIntroduced(_Evt):
+    """Fired when the examiner presents a new problem to the candidate.
+
+    ``problem_id``   – references a ``Problem.id`` in the session's problem list.
+    ``opener_text``  – the narrow first question shown to the candidate.
+    ``ordinal``      – 1-based position in the session's problem sequence
+                       (Problem 1 of N, Problem 2 of N, …).
+    """
+
+    problem_id: ProblemId
+    opener_text: str
+    ordinal: int = Field(ge=1)
+
+
+class ProblemClosed(_Evt):
+    """Fired when the examiner decides the current problem is done.
+
+    ``reason`` encodes *why* the problem was closed:
+    - ``coverage_saturated`` – examiner judged rubric signal sufficient.
+    - ``time_capped``        – wall-clock budget for the problem elapsed.
+    - ``examiner_pivot``     – examiner chose to move on (editorial decision).
+    - ``max_probes``         – safety cap on probes-per-problem fired.
+
+    ``rationale`` is a short human-readable note produced by the examiner
+    at close time (for recruiter dashboard and audit).
+    """
+
+    problem_id: ProblemId
+    reason: Literal["coverage_saturated", "time_capped", "examiner_pivot", "max_probes"]
+    rationale: str = ""
+
+
 EVENT_TYPES: set[type] = {
     # lifecycle
     SessionStarted, CandidateJoined, SessionResumed, SessionEnded, SessionTimedOut,
@@ -217,8 +254,10 @@ EVENT_TYPES: set[type] = {
     CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
     # intake / override
     ProfileIngested, HumanOverride,
-    # case stages
+    # case stages (legacy — kept for replay of Phase α–θ sessions)
     StageEntered, StageCompleted,
+    # Phase 2.1: problem boundaries
+    ProblemIntroduced, ProblemClosed,
 }
 
 

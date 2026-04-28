@@ -3,8 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
+from typing import NewType
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Opaque ID type for problems — str at runtime, distinct in type-checkers.
+ProblemId = NewType("ProblemId", str)
 
 
 class Actor(StrEnum):
@@ -97,6 +101,27 @@ class Score(_Frozen):
     at: datetime
 
 
+class Problem(_Frozen):
+    """A single problem statement within a multi-problem session.
+
+    ``id``                   – opaque identifier, unique within a session.
+    ``opener_text``          – the narrow first question shown to the candidate.
+    ``context``              – full background revealed only to the examiner.
+    ``target_dimensions``    – rubric dims this problem is designed to probe.
+    ``dim_thresholds``       – per-dim signal threshold at which coverage is
+                               considered saturated (0..1 float per Dimension).
+    ``expected_duration_s``  – soft time budget in seconds; used for pacing
+                               guidance, NOT a hard cut-off.
+    """
+
+    id: ProblemId
+    opener_text: str
+    context: str = ""
+    target_dimensions: tuple[Dimension, ...] = ()
+    dim_thresholds: Mapping[Dimension, float] = {}
+    expected_duration_s: int = Field(default=300, ge=0)
+
+
 class Session(_Frozen):
     id: str
     rubric_version: str
@@ -104,3 +129,6 @@ class Session(_Frozen):
     ended_at: datetime | None = None
     turns: tuple[Turn, ...] = ()
     artifacts: tuple[Artifact, ...] = ()
+    # Phase 2.1 — multi-problem fields (empty for legacy sessions)
+    problems: tuple[Problem, ...] = ()
+    current_problem_id: ProblemId | None = None

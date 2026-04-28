@@ -16,11 +16,13 @@ from adapters.scorer._base import BaseLlmScorer
 from adapters.scorer.aggregator import RubricAggregator
 from core.case_loader import CaseDefinition, CaseStage
 from core.contracts import EventLog
-from core.domain import Actor, Artifact, ArtifactKind, Dimension, Signal, TurnKind
+from core.domain import Actor, Artifact, ArtifactKind, Dimension, Problem, Signal, TurnKind
 from core.events import (
     ArtifactAttached,
     Envelope,
     ExaminerFailed,
+    ProblemClosed,
+    ProblemIntroduced,
     ScoreComputed,
     ScorerFailed,
     SessionEnded,
@@ -41,6 +43,8 @@ from core.orchestrator import (
     RequestScoring,
     next_action,
 )
+from core.problem_sequencer import EndSession as SeqEndSession
+from core.problem_sequencer import IntroduceNext, ProblemSequencer
 from core.projections import ArtifactStore, SessionStore
 from core.session_boot import replay_with_stages
 
@@ -67,7 +71,14 @@ class SessionRunner:
     scorers: dict[Dimension, BaseLlmScorer] = field(default_factory=dict)
     scored_dimensions: tuple[Dimension, ...] = DEFAULT_SCORED_DIMENSIONS
     execution_timeout: float = 10.0
-    case: CaseDefinition | None = None  # when set, drives multi-stage Socratic flow
+    # Phase 2.1: multi-problem sequence replaces the single CaseDefinition.
+    # When non-empty, ProblemSequencer drives problem boundaries instead of
+    # the legacy StageEntered/StageCompleted FSM.
+    problems: list[Problem] = field(default_factory=list)
+    # Legacy: kept for backward-compat with existing tests that pass a case;
+    # StageEntered/StageCompleted are still emitted for analytics but the FSM
+    # no longer branches on them when `problems` is set.
+    case: CaseDefinition | None = None
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -76,16 +87,33 @@ class SessionRunner:
     def advance(self, session_id: str, log: EventLog) -> RunResult:
         """Step the FSM until `RequestCandidateInput`, `EndSession`, or `NoAction`."""
         stage_seq = self.case.stages if self.case is not None else ()
+        sequencer = ProblemSequencer(self.problems) if self.problems else None
+
         for _ in range(_MAX_STEPS):
             sessions, scores, signals, runtimes, artifacts, stages = replay_with_stages(
                 session_id, log, stage_sequence=stage_seq
             )
 
-            # ── Multi-stage: check if we should complete the current stage ──
-            if self.case is not None:
+            # ── Phase 2.1: problem-boundary loop (takes priority over stage FSM) ──
+            if sequencer is not None:
+                s = sessions.get(session_id)
+                if s is not None:
+                    seq_action = sequencer.next_event(s)
+                    if isinstance(seq_action, IntroduceNext):
+                        self._do_introduce_problem(session_id, log, seq_action)
+                        continue
+                    if isinstance(seq_action, SeqEndSession):
+                        # All problems closed — proceed to scoring/aggregation via
+                        # the orchestrator (fall through to next_action below).
+                        pass
+                    # Noop: active problem in flight, let orchestrator drive turns.
+
+            # ── Legacy multi-stage FSM: only runs when `problems` list is empty ──
+            # Stage events are kept for analytics on legacy sessions; the hot
+            # path for new sessions uses ProblemSequencer above.
+            elif self.case is not None:
                 cur_id = stages.current_id(session_id)
                 if cur_id is not None and cur_id not in stages.completed_ids(session_id):
-                    # Count candidate answers since StageEntered for cur_id
                     s = sessions.get(session_id)
                     if s is not None:
                         stage_entered_seq = next(
@@ -107,13 +135,11 @@ class SessionRunner:
                             self._append(session_id, log, StageCompleted(stage_id=cur_id))
                             continue
 
-                # If there are uncompleted stages and no current stage, start next one
                 if not stages.all_stages_completed(session_id):
                     next_stage_obj = stages.next_after(session_id)
                     if next_stage_obj is not None:
                         cur = stages.current_id(session_id)
                         if cur is None or cur in stages.completed_ids(session_id):
-                            # Fire the next stage's challenge
                             self._do_stage_challenge(session_id, log, next_stage_obj)
                             continue
 
@@ -187,6 +213,52 @@ class SessionRunner:
             idem_key=idem_key,
         )
         return log.append(env, idem_key)
+
+    def _do_introduce_problem(
+        self, session_id: str, log: EventLog, action: IntroduceNext
+    ) -> None:
+        """Emit ``ProblemIntroduced`` and a challenger turn with the opener text."""
+        problem = action.problem
+        self._append(
+            session_id, log,
+            ProblemIntroduced(
+                problem_id=problem.id,
+                opener_text=problem.opener_text,
+                ordinal=action.ordinal,
+            ),
+        )
+        # Post the opener as a challenger turn so the UI can render it.
+        turn_id = f"t-{uuid.uuid4().hex[:8]}"
+        artifact_id = f"a-{uuid.uuid4().hex[:8]}"
+        self._append(session_id, log, TurnPosted(
+            id=turn_id, actor=Actor.challenger, kind=TurnKind.question
+        ))
+        self._append(session_id, log, ArtifactAttached(
+            id=artifact_id,
+            kind=ArtifactKind.prompt,
+            produced_by_turn_id=turn_id,
+            version=1,
+            content=problem.opener_text,
+        ))
+
+    def _do_close_problem(
+        self,
+        session_id: str,
+        log: EventLog,
+        problem_id: str,
+        reason: str = "examiner_pivot",
+        rationale: str = "",
+    ) -> None:
+        """Emit ``ProblemClosed``.  Called by the examiner path in Phase 2.2."""
+        from core.domain import ProblemId  # local import; avoids circular at top
+        self._append(
+            session_id, log,
+            ProblemClosed(
+                problem_id=ProblemId(problem_id),
+                reason=reason,  # type: ignore[arg-type]
+                rationale=rationale,
+            ),
+        )
 
     def _do_challenge(self, session_id: str, log: EventLog) -> None:
         prompts = list(self.challenger.propose_prompts(session_id))

@@ -19,6 +19,8 @@ from core.events import (
     HumanOverride,
     IdleThresholdCrossed,
     LatencyObserved,
+    ProblemClosed,
+    ProblemIntroduced,
     ProfileIngested,
     RuntimeExecuted,
     RuntimeFailed,
@@ -120,8 +122,10 @@ def test_event_types_registry_covers_all_payloads():
         CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
         # intake / override
         ProfileIngested, HumanOverride,
-        # case stages
+        # case stages (legacy — replay only)
         StageEntered, StageCompleted,
+        # Phase 2.1: problem boundaries
+        ProblemIntroduced, ProblemClosed,
     }
     assert expected == EVENT_TYPES
 
