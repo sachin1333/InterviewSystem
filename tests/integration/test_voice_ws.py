@@ -52,6 +52,8 @@ def _make_voice_runner(
     log: SqliteEventLog,
     stt: FakeStt,
     tts: FakeTts,
+    *,
+    tts_mode: str = "on",
 ) -> VoiceRunner:
     """Create a VoiceRunner with fake STT/TTS."""
     router = ModelRouter(FakeRouter())
@@ -60,6 +62,7 @@ def _make_voice_runner(
         router=router,
         stt=stt,
         tts=tts,
+        tts_mode=tts_mode,
     )
 
 
@@ -225,3 +228,43 @@ def test_voice_ws_not_configured_rejects(tmp_path: Path) -> None:
         assert e.code == 1011
     else:
         raise AssertionError("Expected WebSocketDisconnect with code 1011")
+
+
+def test_voice_ws_tts_off_emits_no_tts_chunks(tmp_path: Path) -> None:
+    log = SqliteEventLog(tmp_path / "log.db")
+    http_router = ModelRouter(FakeRouter())
+    rubric = load_rubric(yaml_str=_MINI_RUBRIC)
+    output_dir = tmp_path / "outputs"
+    http_runner = SessionRunner(
+        challenger=LlmChallenger(http_router),
+        aggregator=RubricAggregator(rubric, output_dir=output_dir),
+        scored_dimensions=(Dimension.model_rationale, Dimension.communication),
+    )
+    stt = FakeStt(script=[SttPartial(text="answer", is_final=True, elapsed_ms=100)])
+    voice_runner = _make_voice_runner(log, stt, FakeTts(bytes_per_char=2), tts_mode="off")
+    app = make_app(log=log, runner=http_runner, output_dir=output_dir, voice_runner=voice_runner)
+    client = TestClient(app)
+    session_id = asyncio.run(voice_runner.start_session())
+
+    with client.websocket_connect(f"/ws/sessions/{session_id}/voice") as ws:
+        ws.send_json({
+            "type": "audio_chunk",
+            "seq": -1,
+            "pcm_b64": "",
+        })
+        seen_transcript = False
+        seen_stage = False
+        seen_tts = False
+        for _ in range(5):
+            msg = ws.receive_json()
+            if msg["type"] == "partial_transcript":
+                seen_transcript = True
+            elif msg["type"] == "stage_change":
+                seen_stage = True
+                break
+            elif msg["type"] == "tts_chunk":
+                seen_tts = True
+
+        assert seen_transcript
+        assert seen_stage
+        assert not seen_tts

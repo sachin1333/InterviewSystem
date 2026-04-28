@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import TypedDict
@@ -9,6 +10,7 @@ from core.domain import Actor, ArtifactKind, Dimension, Problem, ProblemId, Scor
 from core.events import (
     ArtifactAttached,
     Envelope,
+    PerProblemScoreComputed,
     ProblemClosed,
     ProblemIntroduced,
     RuntimeExecuted,
@@ -136,16 +138,38 @@ class SessionStore:
         return self._sessions.get(session_id)
 
 
+@dataclass(frozen=True)
+class ProblemScoreInfo:
+    problem_id: ProblemId
+    ordinal: int
+    score: Score
+
+
 class ScoreStore:
     def __init__(self) -> None:
         self._scores: dict[str, Score] = {}
+        self._problem_scores: dict[str, list[ProblemScoreInfo]] = {}
 
     def apply(self, envelope: Envelope) -> None:
         if isinstance(envelope.payload, ScoreComputed):
             self._scores[envelope.session_id] = envelope.payload.score
+        elif isinstance(envelope.payload, PerProblemScoreComputed):
+            payload = envelope.payload
+            bucket = self._problem_scores.setdefault(envelope.session_id, [])
+            bucket.append(
+                ProblemScoreInfo(
+                    problem_id=payload.problem_id,
+                    ordinal=payload.ordinal,
+                    score=payload.score,
+                )
+            )
+            bucket.sort(key=lambda entry: entry.ordinal)
 
     def get(self, session_id: str) -> Score | None:
         return self._scores.get(session_id)
+
+    def get_problem_scores(self, session_id: str) -> tuple[ProblemScoreInfo, ...]:
+        return tuple(self._problem_scores.get(session_id, ()))
 
 
 class SignalStore:

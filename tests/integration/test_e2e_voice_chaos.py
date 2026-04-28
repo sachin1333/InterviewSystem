@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 from adapters.eventlog.sqlite_log import SqliteEventLog
@@ -13,13 +14,13 @@ from adapters.tts.fallback_chain import FallbackChainTts
 from core.events import SpeechFinalized, TierFallback
 
 
-async def _audio() -> asyncio.AsyncIterator[bytes]:
+async def _audio() -> AsyncIterator[bytes]:
     for _ in range(3):
         yield b"\x00" * 320
 
 
 class _VoiceProvider:
-    def call(self, *, tier: str, prompt: str, stream: bool = False, timeout: float | None = None):
+    def call(self, *, tier: str, prompt: str, stream: bool = False, timeout: float | None = None) -> str | Iterator[str]:
         del tier, prompt, timeout
         text = "Thanks — keep going."
         if stream:
@@ -69,6 +70,7 @@ def test_voice_tts_fallback_records_tier_fallback_event(tmp_path: Path) -> None:
         router=ModelRouter(_VoiceProvider()),
         stt=FakeStt(script=[SttPartial("I would compare against the baseline.", True, 400)]),
         tts=tts,
+        tts_mode="on",
     )
 
     async def go() -> tuple[str, int]:

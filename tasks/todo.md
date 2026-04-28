@@ -1,25 +1,30 @@
-# Current Task — Phase 2.5 Latency Instrumentation Slice
+# Current Task — Phase 2.6 Score Breakdown + Phase 2.7 TTS Gating
+
+## Design
+- **Phase 2.6 approach:** Keep the existing session-level `ScoreComputed` unchanged. Add an additive `PerProblemScoreComputed` event emitted during aggregation by grouping scored signals to problem brackets via artifact→turn→problem replay. Surface those events through `ScoreStore.get_problem_scores()` and render them on the existing result page as the recruiter dashboard slice.
+- **Phase 2.6 scope:** Complete 2.6.1–2.6.3 with persisted per-problem events and result-page bars. Document the business-acumen decision for 2.6.4 using ten representative rubric scenarios. Add a pinned legacy regression test for 2.6.5 proving legacy stage-only sessions still produce identical session-level aggregate scores.
+- **Phase 2.7 approach:** Add `tts_mode` to `VoiceRunner` and `TTS_MODE` env wiring. Default `off` keeps STT + LLM text response and event-log writes but yields no audio chunks and no `AudioChunkAttached`; `on` preserves current TTS behavior.
 
 ## Plan
-- [x] Confirm Phase 2.4 landed on `main` and remote CI passed before starting additional work.
-- [x] Inspect existing latency/event primitives and identify the smallest Phase 2.5 slice that improves observability without changing interview semantics.
-- [x] Write failing tests for per-turn latency instrumentation on candidate submit and examiner/challenger response generation.
-- [x] Add event schema/projection support only as needed for timing dashboard inputs.
-- [x] Instrument HTTP/session-runner hot paths with monotonic timing fields (`submit_received_ms`, `context_assembled_ms`, `first_token_ms`, `first_paint_ms`) and safe defaults.
-- [x] Run focused latency tests, lint, type checks, and full pytest.
-- [x] Update `tasks/phase2_tasks.md` for completed Phase 2.5 scope.
-- [x] Commit and push the verified Phase 2.5 slice.
+- [x] Write failing tests for per-problem score events, score projection, result dashboard rendering, and legacy aggregate stability.
+- [x] Implement additive per-problem event schema and score projection.
+- [x] Group signals by problem bracket and emit per-problem scores during aggregation.
+- [x] Render per-problem breakdown on `result.html`.
+- [x] Document the 2.6.4 business-acumen decision.
+- [x] Write failing tests for default-off TTS and opt-in TTS parity.
+- [x] Implement `tts_mode` in `VoiceRunner`, app env wiring, docs, and examples.
+- [x] Run focused tests, ruff, mypy, full pytest, then update phase checkboxes.
+- [x] Commit, push, and verify remote CI.
 
 ## Review
-- Phase 2.4 remote CI: GitHub Actions run `25059296189` passed on `main` at commit `dd759d5`.
-
-## Phase 2.5 Slice Review
-- Added `TurnTimingObserved` event schema for server-side turn checkpoints: `submit_received_ms`, `context_assembled_ms`, `first_token_ms`, and `first_paint_ms`.
-- Instrumented problem opener, examiner probe, and candidate submit paths with monotonic timings and persisted event-log entries.
-- Added regression coverage for event registry/schema and timing emission on opener generation and candidate submit.
-- Marked only Phase 2.5.6 complete; streaming, prefetch, dashboard, load-test, and fallback items remain open.
+- Added `PerProblemScoreComputed` events, projection support via `ScoreStore.get_problem_scores()`, and per-problem signal grouping during aggregation.
+- Rendered per-problem score cards with dimension bars on the existing result page.
+- Added a pinned legacy aggregate regression proving stage-only sessions retain stable session-level scores and do not emit problem scores.
+- Documented the 2.6.4 business-acumen decision in `docs/business-acumen-dimension-decision.md`: keep business judgment under `insight_interp` for Phase 2.
+- Added `TTS_MODE` default-off gating through `VoiceRunner`, `create_app()`, `.env.example`, README, and bootstrap notes.
+- Updated voice tests so default voice accepts STT and emits no TTS chunks; `TTS_MODE=on` preserves audio/TTS fallback behavior.
 - Verification run:
-  - `.venv/bin/python -m pytest -q tests/integration/test_turn_timing_events.py tests/integration/test_continuous_chat_ui.py tests/integration/test_problem_bank_session.py tests/integration/test_first_paint_latency.py` -> pass.
-  - `.venv/bin/python -m ruff check .` -> pass.
-  - `.venv/bin/python -m mypy core/events.py adapters/http/session_runner.py adapters/http/app.py tests/integration/test_turn_timing_events.py tests/unit/test_events.py` -> pass.
+  - `.venv/bin/python -m pytest -q tests/integration/test_per_problem_scores.py tests/unit/test_voice_runner.py tests/integration/test_voice_ws.py tests/unit/test_events.py` -> pass.
   - `.venv/bin/python -m pytest -q` -> pass.
+  - `.venv/bin/python -m ruff check .` -> pass.
+  - `.venv/bin/python -m mypy core/events.py core/projections.py adapters/http/session_runner.py adapters/http/app.py adapters/http/voice_runner.py tests/integration/test_per_problem_scores.py tests/unit/test_voice_runner.py tests/integration/test_voice_ws.py tests/integration/test_e2e_voice_chaos.py` -> pass.

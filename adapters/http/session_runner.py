@@ -25,6 +25,7 @@ from core.domain import (
     Dimension,
     Problem,
     ProblemId,
+    Score,
     Signal,
     TurnKind,
 )
@@ -33,6 +34,7 @@ from core.events import (
     CoverageSnapshot,
     Envelope,
     ExaminerFailed,
+    PerProblemScoreComputed,
     ProblemClosed,
     ProblemIntroduced,
     ScoreComputed,
@@ -538,12 +540,15 @@ class SessionRunner:
 
     def _do_aggregate(self, session_id: str, log: EventLog) -> None:
         all_signals: list[Signal] = []
-        for env in log.get_session(session_id):
+        envelopes = log.get_session(session_id)
+        for env in envelopes:
             if isinstance(env.payload, SignalEmitted):
                 all_signals.append(env.payload.signal)
 
         result = self.aggregator.aggregate(session_id, all_signals)
         self._append(session_id, log, ScoreComputed(score=result.score))
+        for problem_score in _per_problem_scores(session_id, envelopes, all_signals, self.aggregator):
+            self._append(session_id, log, problem_score)
         self._append(session_id, log, SessionEnded(reason="scored"))
 
     def _last_system_text(
@@ -569,6 +574,84 @@ class SessionRunner:
 # ------------------------------------------------------------------ #
 #  Module-level helpers (pure, no class dependency)                  #
 # ------------------------------------------------------------------ #
+
+def _per_problem_scores(
+    session_id: str,
+    envelopes: tuple[Envelope, ...],
+    signals: list[Signal],
+    aggregator: RubricAggregator,
+) -> list[PerProblemScoreComputed]:
+    turn_problem: dict[str, tuple[ProblemId, int]] = {}
+    artifact_turn: dict[str, str] = {}
+    active_problem: tuple[ProblemId, int] | None = None
+
+    for env in envelopes:
+        payload = env.payload
+        if isinstance(payload, ProblemIntroduced):
+            active_problem = (payload.problem_id, payload.ordinal)
+        elif isinstance(payload, ProblemClosed):
+            if active_problem is not None and active_problem[0] == payload.problem_id:
+                active_problem = None
+        elif isinstance(payload, TurnPosted) and active_problem is not None:
+            turn_problem[payload.id] = active_problem
+        elif isinstance(payload, ArtifactAttached):
+            artifact_turn[payload.id] = payload.produced_by_turn_id
+
+    grouped: dict[tuple[ProblemId, int], list[Signal]] = {}
+    for signal in signals:
+        seen: set[tuple[ProblemId, int]] = set()
+        for ref in signal.source_refs:
+            turn_id = artifact_turn.get(ref)
+            if turn_id is None:
+                continue
+            problem_key = turn_problem.get(turn_id)
+            if problem_key is not None:
+                seen.add(problem_key)
+        for problem_key in seen:
+            grouped.setdefault(problem_key, []).append(signal)
+
+    out: list[PerProblemScoreComputed] = []
+    for (problem_id, ordinal), problem_signals in sorted(grouped.items(), key=lambda item: item[0][1]):
+        score = _score_signals_without_feedback(session_id, problem_signals, aggregator)
+        if score.per_dimension:
+            out.append(
+                PerProblemScoreComputed(
+                    problem_id=problem_id,
+                    ordinal=ordinal,
+                    score=score,
+                )
+            )
+    return out
+
+
+def _score_signals_without_feedback(
+    session_id: str,
+    signals: list[Signal],
+    aggregator: RubricAggregator,
+) -> Score:
+    per_dimension: dict[Dimension, float] = {}
+    weighted_total = 0.0
+    included_weight = 0.0
+    for dimension, weight in aggregator.rubric.weights.items():
+        dimension_signals = [signal for signal in signals if signal.dimension == dimension]
+        if len(dimension_signals) < aggregator.min_signals_per_dimension:
+            continue
+        dimension_score = aggregator._dimension_score(dimension_signals)
+        if dimension_score is None:
+            continue
+        rounded = round(dimension_score, 4)
+        per_dimension[dimension] = rounded
+        weighted_total += rounded * weight
+        included_weight += weight
+    composite = round(weighted_total / included_weight, 4) if included_weight else 0.0
+    return Score(
+        session_id=session_id,
+        rubric_version=aggregator.rubric.version,
+        per_dimension=per_dimension,
+        composite=composite,
+        at=datetime.now(UTC),
+    )
+
 
 def _elapsed_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))

@@ -33,10 +33,13 @@ Tests: `uv run pytest` (127 unit tests, no network).
 - `VOICE_MODE=off` (default): existing text-only experience.
 - `VOICE_MODE=on`: voice UI is shown; the candidate can manually switch to typing.
 - `VOICE_MODE=forced`: voice UI is shown and manual switching is hidden; the text panel still opens automatically for text-heavy stages.
+- `TTS_MODE=off` (default): voice sessions accept speech input and render interviewer text without audio playback.
+- `TTS_MODE=on`: streams examiner audio using Cartesia/ElevenLabs when keys are configured, or fake TTS in offline tests.
 
 ```bash
 VOICE_MODE=off uv run uvicorn adapters.http.app:create_app --factory
 VOICE_MODE=on uv run uvicorn adapters.http.app:create_app --factory
+VOICE_MODE=on TTS_MODE=on uv run uvicorn adapters.http.app:create_app --factory
 ```
 
 ### Voice env vars
@@ -48,8 +51,9 @@ VOICE_MODE=on uv run uvicorn adapters.http.app:create_app --factory
 | `CARTESIA_API_KEY` | optional | — | Primary Cartesia Sonic TTS |
 | `ELEVENLABS_API_KEY` | optional | — | ElevenLabs Flash fallback TTS |
 | `VOICE_LATENCY_BUDGET_MS` | no | `800` | Soft SLA for voice-turn latency monitoring |
+| `TTS_MODE` | no | `off` | Text-to-speech playback gate (`on` enables audio chunks) |
 
-If the voice provider keys are missing, the app falls back to deterministic fake STT/TTS adapters so the browser flow and tests still work offline.
+If the STT provider key is missing, the app falls back to deterministic fake STT. TTS is disabled unless `TTS_MODE=on`; when enabled without provider keys, deterministic fake TTS keeps the browser flow and tests offline.
 
 ## Architecture in one paragraph
 

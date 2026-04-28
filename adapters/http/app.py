@@ -373,6 +373,7 @@ def make_app(
         _log: EventLog = app.state.log
         _, scores, _, _, _ = replay(session_id, _log)
         score = scores.get(session_id)
+        problem_scores = scores.get_problem_scores(session_id)
 
         feedback_md = ""
         if output_dir is not None:
@@ -385,6 +386,7 @@ def make_app(
         return templates.TemplateResponse(request, "result.html", {
             "session_id": session_id,
             "score": score,
+            "problem_scores": problem_scores,
             "feedback_md": feedback_md,
         })
 
@@ -584,6 +586,9 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     if voice_mode not in {"off", "on", "forced"}:
         voice_mode = "off"
     voice_latency_budget_ms = int(os.getenv("VOICE_LATENCY_BUDGET_MS", "800"))
+    tts_mode = os.getenv("TTS_MODE", "off").strip().lower() or "off"
+    if tts_mode not in {"off", "on"}:
+        tts_mode = "off"
     rubric_path = _Path("templates") / "rubrics" / "ds-ml-engineer-v1.yaml"
     output_dir = _Path(os.getenv("OUTPUT_DIR", "outputs"))
     aggregator = RubricAggregator.from_yaml(rubric_path, output_dir=output_dir)
@@ -615,18 +620,22 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     )
     voice_runner = None
     if voice_mode != "off":
-        primary_tts = CartesiaSonicTts()
-        fallback_tts = ElevenLabsFlashTts()
-        tts = (
-            FallbackChainTts(primary_tts, fallback_tts)
-            if (os.getenv("CARTESIA_API_KEY") or os.getenv("ELEVENLABS_API_KEY"))
-            else FakeTts(bytes_per_char=2)
-        )
+        if tts_mode == "on":
+            primary_tts = CartesiaSonicTts()
+            fallback_tts = ElevenLabsFlashTts()
+            tts = (
+                FallbackChainTts(primary_tts, fallback_tts)
+                if (os.getenv("CARTESIA_API_KEY") or os.getenv("ELEVENLABS_API_KEY"))
+                else FakeTts(bytes_per_char=2)
+            )
+        else:
+            tts = FakeTts(bytes_per_char=0)
         voice_runner = VoiceRunner(
             log=log,
             router=router,
             stt=make_stt(),
             tts=tts,
+            tts_mode=tts_mode,
             communication_scorer=communication_scorer,
             authenticity_scorer=AuthenticityScorer(),
         )

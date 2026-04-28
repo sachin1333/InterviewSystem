@@ -29,7 +29,12 @@ Run this once per new template (e.g. "Senior ML Engineer, Q2 2026"). After first
 5. **Attach a starter dataset (optional).**
    - Drop into `templates/instances/<template-slug>/datasets/`. Reference by URI in the seed.
 
-6. **Smoke test.**
+6. **Voice/TTS policy.**
+   - Default runtime voice config is `VOICE_MODE=off` and `TTS_MODE=off`.
+   - Enable `VOICE_MODE=on` to accept speech input.
+   - Enable `TTS_MODE=on` only when interviewer audio playback is explicitly desired.
+
+7. **Smoke test.**
    - Run `python -m interview_system.bootstrap.smoke --template <slug>`.
    - It starts a simulated session with a stub candidate and prints:
      - Whether every rubric dimension got at least one signal from a scorer.
@@ -37,7 +42,7 @@ Run this once per new template (e.g. "Senior ML Engineer, Q2 2026"). After first
      - Whether the session ended cleanly.
    - Any red → fix before shipping the template.
 
-7. **Mark complete.**
+8. **Mark complete.**
    - `touch templates/instances/<template-slug>/BOOTSTRAP_COMPLETE`.
    - Commit.
 

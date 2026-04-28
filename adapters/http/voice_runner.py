@@ -63,6 +63,7 @@ class VoiceRunner:
         case_path: str | Path = DEFAULT_CASE_PATH,
         voice_id: str = "default",
         rubric_version: str = "ds-ml-v1",
+        tts_mode: str = "off",
         communication_scorer: LlmCommunicationScorer | None = None,
         authenticity_scorer: AuthenticityScorer | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -74,6 +75,8 @@ class VoiceRunner:
         self.case: CaseDefinition = load_case(case_path)
         self.voice_id = voice_id
         self.rubric_version = rubric_version
+        normalized_tts_mode = tts_mode.strip().lower() or "off"
+        self.tts_mode = normalized_tts_mode if normalized_tts_mode in {"off", "on"} else "off"
         self.communication_scorer = communication_scorer
         self.authenticity_scorer = authenticity_scorer
         self.clock = clock
@@ -166,7 +169,7 @@ class VoiceRunner:
         metrics = self.router.call_streaming_with_metrics(tier="mid", prompt=prompt)
         llm_ttft_ms = metrics.ttft_ms
 
-        # 3. TTS: stream synthesizer over the LLM text.
+        # 3. TTS: stream synthesizer over the LLM text only when explicitly enabled.
         text_for_tts = metrics.text
         tts_first_byte_holder = {"ms": 0}
 
@@ -174,18 +177,19 @@ class VoiceRunner:
             yield text_for_tts
 
         synth_started = self.clock()
-        synth_iter = self.tts.synthesize(_text_chunks(), voice_id=self.voice_id)
 
         async def _audio_with_timing() -> AsyncIterator[bytes]:
             first = True
             total_bytes = 0
             try:
-                async for chunk in synth_iter:
-                    if first and chunk:
-                        tts_first_byte_holder["ms"] = int((self.clock() - synth_started) * 1000)
-                        first = False
-                    total_bytes += len(chunk)
-                    yield chunk
+                if self.tts_mode == "on":
+                    synth_iter = self.tts.synthesize(_text_chunks(), voice_id=self.voice_id)
+                    async for chunk in synth_iter:
+                        if first and chunk:
+                            tts_first_byte_holder["ms"] = int((self.clock() - synth_started) * 1000)
+                            first = False
+                        total_bytes += len(chunk)
+                        yield chunk
             finally:
                 self._emit_tts_fallback_events(session_id)
                 examiner_turn_id = f"turn-{uuid.uuid4().hex[:10]}"

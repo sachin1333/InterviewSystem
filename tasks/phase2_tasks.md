@@ -91,18 +91,18 @@ Order within each phase is the suggested execution order. Sub-phases run in the 
 
 ## Phase 2.6 — Per-problem score breakdown
 
-- [ ] **2.6.1** [medium] Aggregator emits per-problem scores in addition to the session aggregate; events persisted in the log.
-- [ ] **2.6.2** [easy] Persist per-problem score events with proper indexing for dashboard reads.
-- [ ] **2.6.3** [medium] Recruiter dashboard: render per-problem breakdown side-by-side with the session aggregate; per-dim bars per problem.
-- [ ] **2.6.4** [hard] Business-acumen decision: analyze 10 sample sessions, measure how often `insight_interp` covers business-judgment signal, decide split / rename / keep, document conclusion.
-- [ ] **2.6.5** [medium] Pinned regression session: a Phase α session re-scored under the new aggregator must remain within ±2pp per dimension of its original session-level scores.
+- [x] **2.6.1** [medium] Aggregator emits per-problem scores in addition to the session aggregate; events persisted in the log.
+- [x] **2.6.2** [easy] Persist per-problem score events with proper indexing for dashboard reads.
+- [x] **2.6.3** [medium] Recruiter dashboard: render per-problem breakdown side-by-side with the session aggregate; per-dim bars per problem.
+- [x] **2.6.4** [hard] Business-acumen decision: analyze 10 sample sessions, measure how often `insight_interp` covers business-judgment signal, decide split / rename / keep, document conclusion.
+- [x] **2.6.5** [medium] Pinned regression session: a Phase α session re-scored under the new aggregator must remain within ±2pp per dimension of its original session-level scores.
 
 ## Phase 2.7 — TTS gating
 
-- [ ] **2.7.1** [easy] Add `TTS_MODE` env var with default `off`; `adapters/http/voice_runner.py` branches on it.
-- [ ] **2.7.2** [easy] Default-off path: WS voice session accepts STT inbound but emits no TTS chunks; UI does not request TTS.
-- [ ] **2.7.3** [easy] Update voice tests to cover TTS-off as the default; add a `TTS_MODE=on` path test for parity.
-- [ ] **2.7.4** [easy] Update README and bootstrap notes to reflect the new default and the opt-in flag.
+- [x] **2.7.1** [easy] Add `TTS_MODE` env var with default `off`; `adapters/http/voice_runner.py` branches on it.
+- [x] **2.7.2** [easy] Default-off path: WS voice session accepts STT inbound but emits no TTS chunks; UI does not request TTS.
+- [x] **2.7.3** [easy] Update voice tests to cover TTS-off as the default; add a `TTS_MODE=on` path test for parity.
+- [x] **2.7.4** [easy] Update README and bootstrap notes to reflect the new default and the opt-in flag.
 
 ## Cross-cutting
 

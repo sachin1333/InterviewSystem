@@ -6,6 +6,9 @@
   <style>
     body { font-family: monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
     .score-box { background: #f0f8f0; border-left: 4px solid #2a7; padding: 1rem; margin-bottom: 1.5rem; }
+    .problem-score { border: 1px solid #ddd; padding: 1rem; margin: .75rem 0; }
+    .bar { background: #eee; height: .7rem; margin: .25rem 0 .75rem; }
+    .bar span { display: block; height: 100%; background: #2a7; }
     pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; overflow-wrap: break-word; }
     .no-score { color: #888; }
   </style>
@@ -26,6 +29,20 @@
   </div>
   {% else %}
   <p class="no-score">Score not yet computed.</p>
+  {% endif %}
+
+  {% if problem_scores %}
+  <h2>Per-problem breakdown</h2>
+  {% for item in problem_scores %}
+  <section class="problem-score">
+    <h3>Problem {{ item.ordinal }}</h3>
+    <strong>Composite: {{ "%.2f"|format(item.score.composite) }}</strong>
+    {% for dim, val in item.score.per_dimension.items() %}
+      <div>{{ dim }}: {{ "%.2f"|format(val) }}</div>
+      <div class="bar" aria-label="{{ dim }} score {{ '%.2f'|format(val) }}"><span style="width: {{ (val * 100)|round(0, 'floor') }}%"></span></div>
+    {% endfor %}
+  </section>
+  {% endfor %}
   {% endif %}
 
   {% if feedback_md %}

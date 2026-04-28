@@ -106,6 +106,14 @@ class ScoreComputed(_Evt):
     score: Score
 
 
+class PerProblemScoreComputed(_Evt):
+    """Score breakdown for one problem in a multi-problem session."""
+
+    problem_id: ProblemId
+    ordinal: int = Field(ge=1)
+    score: Score
+
+
 # --- adapter failure audit -----------------------------------------------
 
 class ChallengerFailed(_Evt):
@@ -272,7 +280,7 @@ EVENT_TYPES: set[type] = {
     # runtime
     RuntimeExecuted, RuntimeFailed,
     # scoring
-    SignalEmitted, ScoreComputed,
+    SignalEmitted, ScoreComputed, PerProblemScoreComputed,
     # adapter failures
     ChallengerFailed, ExaminerFailed, ScorerFailed,
     # voice

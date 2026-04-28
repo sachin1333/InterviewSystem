@@ -20,6 +20,7 @@ from core.events import (
     HumanOverride,
     IdleThresholdCrossed,
     LatencyObserved,
+    PerProblemScoreComputed,
     ProblemClosed,
     ProblemIntroduced,
     ProfileIngested,
@@ -128,7 +129,7 @@ def test_event_types_registry_covers_all_payloads():
         # runtime
         RuntimeExecuted, RuntimeFailed,
         # scoring
-        SignalEmitted, ScoreComputed,
+        SignalEmitted, ScoreComputed, PerProblemScoreComputed,
         # adapter failures
         ChallengerFailed, ExaminerFailed, ScorerFailed,
         # voice
