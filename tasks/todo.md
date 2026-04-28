@@ -21,3 +21,12 @@
   - `.venv/bin/python -m pytest -q` -> pass.
   - `.venv/bin/python -m ruff check .` -> pass.
   - `.venv/bin/python -m mypy core/problem_bank.py adapters/http/session_runner.py adapters/http/app.py tests/unit/test_problem_bank.py tests/integration/test_problem_bank_session.py` -> pass.
+
+## CI follow-up
+- Root cause from GitHub Actions run `25057329918`: CI executed `python -m pip install -e ".[dev]"`, but `pyproject.toml` only defined `[dependency-groups].dev`; pip extras require `[project.optional-dependencies].dev`, so `ruff` was not installed and the lint step failed with `ruff: command not found`.
+- Added a regression test in `tests/unit/test_packaging_metadata.py` proving the `dev` extra exposes `ruff`, `mypy`, and `pytest` for CI.
+- Added `[project.optional-dependencies].dev` to `pyproject.toml` while leaving the existing dependency group intact.
+- Local verification after the fix:
+  - `.venv/bin/python -m ruff check .` -> pass.
+  - `.venv/bin/python -m pytest -q` -> pass.
+  - `.venv/bin/python -m mypy --strict core` -> pass.
