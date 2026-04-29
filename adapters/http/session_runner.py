@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 
 from adapters.challenger.llm_challenger import LlmChallenger
 from adapters.examiner.llm_examiner import CoverageContext, LlmExaminer
@@ -36,7 +36,9 @@ from core.events import (
     ExaminerFailed,
     PerProblemScoreComputed,
     ProblemClosed,
+    ProblemCoverageObserved,
     ProblemIntroduced,
+    ProblemPlanSelected,
     ScoreComputed,
     ScorerFailed,
     SessionEnded,
@@ -106,17 +108,24 @@ class SessionRunner:
     def advance(self, session_id: str, log: EventLog) -> RunResult:
         """Step the FSM until `RequestCandidateInput`, `EndSession`, or `NoAction`."""
         stage_seq = self.case.stages if self.case is not None else ()
-        planned_problems = self._planned_problems(session_id)
-        sequencer = ProblemSequencer(planned_problems) if planned_problems else None
 
         for _ in range(_MAX_STEPS):
             sessions, scores, signals, runtimes, artifacts, stages = replay_with_stages(
                 session_id, log, stage_sequence=stage_seq
             )
+            s = sessions.get(session_id)
+            plan_missing = (
+                s is not None
+                and self.problem_bank is not None
+                and not s["planned_problem_ids"]
+            )
+            planned_problems = self._planned_problems(session_id, log, s)
+            if plan_missing and planned_problems:
+                continue
+            sequencer = ProblemSequencer(planned_problems) if planned_problems else None
 
             # ── Phase 2.1: problem-boundary loop (takes priority over stage FSM) ──
             if sequencer is not None:
-                s = sessions.get(session_id)
                 if s is not None:
                     seq_action = sequencer.next_event(s)
                     if isinstance(seq_action, IntroduceNext):
@@ -168,6 +177,14 @@ class SessionRunner:
                 scored_dimensions=self.scored_dimensions,
             )
 
+            if (
+                sequencer is not None
+                and self._problem_turn_needs_examiner(sessions.get(session_id))
+                and not isinstance(action, RequestExecution)
+            ):
+                self._do_probe(session_id, log)
+                continue
+
             if isinstance(action, RequestCandidateInput):
                 text = self._last_system_text(session_id, sessions, artifacts)
                 return RunResult(
@@ -187,7 +204,18 @@ class SessionRunner:
                 return RunResult(state="no_op", session_id=session_id)
 
             if isinstance(action, RequestChallenge):
-                if self.case is not None:
+                if sequencer is not None:
+                    current_problem_id = s["current_problem_id"] if s is not None else None
+                    problem = _find_problem(planned_problems, current_problem_id)
+                    if problem is not None:
+                        ordinal = planned_problems.index(problem) + 1
+                        self._do_introduce_problem(
+                            session_id,
+                            log,
+                            IntroduceNext(problem=problem, ordinal=ordinal),
+                        )
+                        continue
+                elif self.case is not None:
                     # In multi-stage mode, challenge is handled by _do_stage_challenge above.
                     # This branch is only reached when all stages are complete — skip.
                     pass
@@ -213,17 +241,61 @@ class SessionRunner:
         return RunResult(state="no_op", session_id=session_id)
 
 
-    def _planned_problems(self, session_id: str) -> list[Problem]:
+    @staticmethod
+    def _problem_turn_needs_examiner(session_record: object | None) -> bool:
+        """True when an active problem has a candidate turn ready for examiner review."""
+        if not isinstance(session_record, dict) or session_record.get("current_problem_id") is None:
+            return False
+        turns = session_record.get("turns")
+        if not isinstance(turns, list) or not turns:
+            return False
+        last = turns[-1]
+        if not isinstance(last, dict):
+            return False
+        return (
+            last.get("actor") == Actor.candidate
+            and last.get("kind") in (TurnKind.answer, TurnKind.defense)
+        )
+
+
+    def _planned_problems(
+        self,
+        session_id: str,
+        log: EventLog,
+        session_record: object | None = None,
+    ) -> list[Problem]:
         """Return the problem sequence for this session.
 
         Explicit ``problems`` preserves test/backward-compatible injection. When
-        absent, Phase 2.3 draws a deterministic sequence from ``problem_bank``.
+        absent, Phase 2.3 draws a deterministic sequence from ``problem_bank``
+        and persists the selected problem IDs once per session.
         """
         if self.problems:
             return list(self.problems)
         if self.problem_bank is None:
             return []
-        return self.problem_bank.pick_sequence(session_id)
+        if isinstance(session_record, dict):
+            planned_ids = session_record.get("planned_problem_ids") or ()
+            if planned_ids:
+                out: list[Problem] = []
+                for raw_pid in planned_ids:
+                    problem = self.problem_bank.get(ProblemId(str(raw_pid)))
+                    if problem is not None:
+                        out.append(problem)
+                return out
+
+        selected = self.problem_bank.pick_sequence(session_id)
+        self._append(
+            session_id,
+            log,
+            ProblemPlanSelected(
+                problem_ids=tuple(problem.id for problem in selected),
+                bank_version=self.problem_bank.version,
+                source="problem_bank",
+            ),
+            idem_key="problem-plan-selected",
+        )
+        return selected
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
@@ -247,6 +319,33 @@ class SessionRunner:
         )
         return log.append(env, idem_key)
 
+    def _append_turn_with_artifact(
+        self,
+        session_id: str,
+        log: EventLog,
+        *,
+        turn: TurnPosted,
+        artifact: ArtifactAttached,
+        turn_key: str,
+        artifact_key: str,
+    ) -> str:
+        """Append a turn and artifact idempotently, linking to the stored turn id."""
+        turn_env = self._append(session_id, log, turn, idem_key=turn_key)
+        stored_turn = cast(TurnPosted, turn_env.payload)
+        self._append(
+            session_id,
+            log,
+            ArtifactAttached(
+                id=artifact.id,
+                kind=artifact.kind,
+                produced_by_turn_id=stored_turn.id,
+                version=artifact.version,
+                content=artifact.content,
+            ),
+            idem_key=artifact_key,
+        )
+        return stored_turn.id
+
     def _do_introduce_problem(
         self, session_id: str, log: EventLog, action: IntroduceNext
     ) -> None:
@@ -261,29 +360,34 @@ class SessionRunner:
                 opener_text=problem.opener_text,
                 ordinal=action.ordinal,
             ),
+            idem_key=f"problem-introduced:{problem.id}",
         )
         # Post the opener as a challenger turn so the UI can render it.
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
         artifact_id = f"a-{uuid.uuid4().hex[:8]}"
-        self._append(session_id, log, TurnPosted(
-            id=turn_id, actor=Actor.challenger, kind=TurnKind.question
-        ))
-        self._append(session_id, log, ArtifactAttached(
-            id=artifact_id,
-            kind=ArtifactKind.prompt,
-            produced_by_turn_id=turn_id,
-            version=1,
-            content=problem.opener_text,
-        ))
+        stored_turn_id = self._append_turn_with_artifact(
+            session_id,
+            log,
+            turn=TurnPosted(id=turn_id, actor=Actor.challenger, kind=TurnKind.question),
+            artifact=ArtifactAttached(
+                id=artifact_id,
+                kind=ArtifactKind.prompt,
+                produced_by_turn_id=turn_id,
+                version=1,
+                content=problem.opener_text,
+            ),
+            turn_key=f"problem-opener-turn:{problem.id}",
+            artifact_key=f"problem-opener-artifact:{problem.id}",
+        )
         first_paint_ms = _elapsed_ms(started)
         self._append(session_id, log, TurnTimingObserved(
-            turn_id=turn_id,
+            turn_id=stored_turn_id,
             phase="challenger_opener",
             submit_received_ms=0,
             context_assembled_ms=context_assembled_ms,
             first_token_ms=context_assembled_ms,
             first_paint_ms=first_paint_ms,
-        ))
+        ), idem_key=f"problem-opener-timing:{problem.id}")
 
     def _do_close_problem(
         self,
@@ -302,6 +406,7 @@ class SessionRunner:
                 reason=reason,
                 rationale=rationale,
             ),
+            idem_key=f"problem-closed:{problem_id}",
         )
 
     def _do_challenge(self, session_id: str, log: EventLog) -> None:
@@ -309,14 +414,29 @@ class SessionRunner:
         prompt_text = prompts[0] if prompts else "(no question generated)"
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
         artifact_id = f"a-{uuid.uuid4().hex[:8]}"
-        self._append(session_id, log, TurnPosted(id=turn_id, actor=Actor.challenger, kind=TurnKind.question))
-        self._append(session_id, log, ArtifactAttached(
-            id=artifact_id,
-            kind=ArtifactKind.prompt,
-            produced_by_turn_id=turn_id,
-            version=1,
-            content=prompt_text,
-        ))
+        sessions, _, _, _, _ = _replay_minimal(session_id, log)
+        s = sessions.get(session_id)
+        answer_count = 0
+        if s is not None:
+            answer_count = sum(
+                1
+                for turn in s["turns"]
+                if turn["actor"] == Actor.candidate and turn["kind"] == TurnKind.answer
+            )
+        self._append_turn_with_artifact(
+            session_id,
+            log,
+            turn=TurnPosted(id=turn_id, actor=Actor.challenger, kind=TurnKind.question),
+            artifact=ArtifactAttached(
+                id=artifact_id,
+                kind=ArtifactKind.prompt,
+                produced_by_turn_id=turn_id,
+                version=1,
+                content=prompt_text,
+            ),
+            turn_key=f"challenge-turn-after-answers:{answer_count}",
+            artifact_key=f"challenge-artifact-after-answers:{answer_count}",
+        )
 
     def _do_stage_challenge(self, session_id: str, log: EventLog, stage: CaseStage) -> None:
         """Issue a challenger turn for the given CaseStage and mark it as entered."""
@@ -340,15 +460,26 @@ class SessionRunner:
 
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
         artifact_id = f"a-{uuid.uuid4().hex[:8]}"
-        self._append(session_id, log, StageEntered(stage_id=stage_id, primitive=primitive_val))
-        self._append(session_id, log, TurnPosted(id=turn_id, actor=Actor.challenger, kind=TurnKind.question))
-        self._append(session_id, log, ArtifactAttached(
-            id=artifact_id,
-            kind=ArtifactKind.prompt,
-            produced_by_turn_id=turn_id,
-            version=1,
-            content=prompt_text,
-        ))
+        self._append(
+            session_id,
+            log,
+            StageEntered(stage_id=stage_id, primitive=primitive_val),
+            idem_key=f"stage-entered:{stage_id}",
+        )
+        self._append_turn_with_artifact(
+            session_id,
+            log,
+            turn=TurnPosted(id=turn_id, actor=Actor.challenger, kind=TurnKind.question),
+            artifact=ArtifactAttached(
+                id=artifact_id,
+                kind=ArtifactKind.prompt,
+                produced_by_turn_id=turn_id,
+                version=1,
+                content=prompt_text,
+            ),
+            turn_key=f"stage-turn:{stage_id}",
+            artifact_key=f"stage-artifact:{stage_id}",
+        )
 
     def _do_probe(self, session_id: str, log: EventLog) -> None:
         """Issue an examiner probe or close the current problem (Phase 2.2).
@@ -367,6 +498,14 @@ class SessionRunner:
         sessions, _, _, _, _ = _replay_minimal(session_id, log)
         s = sessions.get(session_id)
         current_problem_id: str | None = s["current_problem_id"] if s else None
+        last_candidate_turn_id = "none"
+        if s is not None:
+            for turn in reversed(s["turns"]):
+                if turn["actor"] == Actor.candidate:
+                    last_candidate_turn_id = turn["id"]
+                    break
+
+        self._emit_problem_coverage_for_latest_candidate(session_id, log, current_problem_id)
 
         # ── Build coverage tracker from event log ──
         tracker = _build_coverage_tracker(session_id, log)
@@ -385,7 +524,10 @@ class SessionRunner:
             return
 
         # ── Build coverage context for examiner ──
-        problem_obj = _find_problem(self._planned_problems(session_id), current_problem_id)
+        problem_obj = _find_problem(
+            self._planned_problems(session_id, log, s),
+            current_problem_id,
+        )
         thresholds = problem_obj.dim_thresholds if problem_obj else {}
         under_served = (
             tracker.under_served(ProblemId(current_problem_id), thresholds)
@@ -404,6 +546,9 @@ class SessionRunner:
             probe_count=probe_count,
             max_probes=self.max_probes_per_problem,
             problem_transcript=transcript,
+            problem_context=problem_obj.context if problem_obj else "",
+            target_dimensions=tuple(d.value for d in (problem_obj.target_dimensions if problem_obj else ())),
+            expected_duration_s=problem_obj.expected_duration_s if problem_obj else 0,
         )
         context_assembled_ms = _elapsed_ms(started)
 
@@ -428,18 +573,28 @@ class SessionRunner:
                     probe_count=probe_count,
                     signal_map={d.value: v for d, v in signal_map.items()},
                     under_served=[d.value for d in under_served],
-                ))
+                ), idem_key=f"coverage-snapshot:{current_problem_id}:{last_candidate_turn_id}")
 
             probe_text: str | None = outcome.probe_text if not outcome.ok_to_advance else None
         else:
             probe_text = None
+        if failure is not None and not probe_text:
+            probe_text = (
+                "Please clarify your assumptions and the next concrete step you would take "
+                "before committing to a model or recommendation."
+            )
         first_token_ms = _elapsed_ms(started) if probe_text else context_assembled_ms
 
         # ── Post probe turn ──
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
-        self._append(session_id, log, TurnPosted(
-            id=turn_id, actor=Actor.examiner, kind=TurnKind.probe
-        ))
+        turn_env = self._append(
+            session_id,
+            log,
+            TurnPosted(id=turn_id, actor=Actor.examiner, kind=TurnKind.probe),
+            idem_key=f"probe-after:{last_candidate_turn_id}",
+        )
+        stored_turn = cast(TurnPosted, turn_env.payload)
+        turn_id = stored_turn.id
         if probe_text:
             artifact_id = f"a-{uuid.uuid4().hex[:8]}"
             self._append(session_id, log, ArtifactAttached(
@@ -448,9 +603,14 @@ class SessionRunner:
                 produced_by_turn_id=turn_id,
                 version=1,
                 content=probe_text,
-            ))
+            ), idem_key=f"probe-artifact-after:{last_candidate_turn_id}")
         if failure is not None:
-            self._append(session_id, log, failure)
+            self._append(
+                session_id,
+                log,
+                failure,
+                idem_key=f"examiner-failed-after:{last_candidate_turn_id}",
+            )
         self._append(session_id, log, TurnTimingObserved(
             turn_id=turn_id,
             phase="examiner_probe",
@@ -458,7 +618,7 @@ class SessionRunner:
             context_assembled_ms=context_assembled_ms,
             first_token_ms=first_token_ms,
             first_paint_ms=_elapsed_ms(started),
-        ))
+        ), idem_key=f"probe-timing-after:{last_candidate_turn_id}")
 
     def _do_execution(
         self,
@@ -471,6 +631,54 @@ class SessionRunner:
         code = artifacts.get(artifact_id) or ""
         from adapters.runtime.runtime_adapter import RuntimeAdapter  # deferred to avoid cycles
         RuntimeAdapter(log).execute(session_id, turn_id, code, timeout_seconds=self.execution_timeout)
+
+    def _emit_problem_coverage_for_latest_candidate(
+        self,
+        session_id: str,
+        log: EventLog,
+        problem_id: str | None,
+    ) -> None:
+        """Emit problem-scoped coverage observations for the latest answer artifact."""
+        if problem_id is None:
+            return
+        sessions, _, _, _, artifacts = _replay_minimal(session_id, log)
+        s = sessions.get(session_id)
+        if s is None:
+            return
+
+        problem = _find_problem(self._planned_problems(session_id, log, s), problem_id)
+        dimensions = (
+            tuple(problem.target_dimensions)
+            if problem is not None and problem.target_dimensions
+            else tuple(self.scored_dimensions)
+        )
+        latest_turn_id: str | None = None
+        for turn in reversed(s["turns"]):
+            if turn["actor"] == Actor.candidate:
+                latest_turn_id = turn["id"]
+                break
+        if latest_turn_id is None:
+            return
+
+        for artifact_id, turn_id in s["artifact_turn"].items():
+            if turn_id != latest_turn_id:
+                continue
+            if s["artifact_kind"].get(artifact_id) != ArtifactKind.markdown:
+                continue
+            text = artifacts.get(artifact_id) or ""
+            for dimension in dimensions:
+                self._append(
+                    session_id,
+                    log,
+                    ProblemCoverageObserved(
+                        problem_id=ProblemId(problem_id),
+                        artifact_id=artifact_id,
+                        dimension=dimension,
+                        value=_heuristic_coverage_value(dimension, text),
+                        confidence=0.35,
+                    ),
+                    idem_key=f"coverage:{problem_id}:{artifact_id}:{dimension.value}",
+                )
 
     def _do_scoring(
         self,
@@ -506,8 +714,18 @@ class SessionRunner:
                 emitted_by="session_runner:no_scorer",
                 at=datetime.now(UTC),
             )
-            self._append(session_id, log, ScorerFailed(dimension=dimension, reason="no scorer configured"))
-            self._append(session_id, log, SignalEmitted(signal=dummy))
+            self._append(
+                session_id,
+                log,
+                ScorerFailed(dimension=dimension, reason="no scorer configured"),
+                idem_key=f"scorer-failed:{artifact_id}:{dimension.value}",
+            )
+            self._append(
+                session_id,
+                log,
+                SignalEmitted(signal=dummy),
+                idem_key=f"signal:{artifact_id}:{dimension.value}",
+            )
             return
 
         result = scorer.score_optional(session_id, artifact)
@@ -515,7 +733,7 @@ class SessionRunner:
         if result.failure is not None:
             self._append(session_id, log, ScorerFailed(
                 dimension=dimension, reason=result.failure.reason,
-            ))
+            ), idem_key=f"scorer-failed:{artifact_id}:{dimension.value}")
 
         signal = result.signal
         if signal is None:
@@ -534,7 +752,12 @@ class SessionRunner:
                 at=signal.at,
             )
 
-        self._append(session_id, log, SignalEmitted(signal=signal))
+        self._append(
+            session_id,
+            log,
+            SignalEmitted(signal=signal),
+            idem_key=f"signal:{artifact_id}:{dimension.value}",
+        )
         # CoverageTracker is rebuilt from SignalEmitted events on each request
         # (event-sourced): no in-memory update needed here.
 
@@ -546,10 +769,15 @@ class SessionRunner:
                 all_signals.append(env.payload.signal)
 
         result = self.aggregator.aggregate(session_id, all_signals)
-        self._append(session_id, log, ScoreComputed(score=result.score))
+        self._append(session_id, log, ScoreComputed(score=result.score), idem_key="score-computed")
         for problem_score in _per_problem_scores(session_id, envelopes, all_signals, self.aggregator):
-            self._append(session_id, log, problem_score)
-        self._append(session_id, log, SessionEnded(reason="scored"))
+            self._append(
+                session_id,
+                log,
+                problem_score,
+                idem_key=f"per-problem-score:{problem_score.problem_id}",
+            )
+        self._append(session_id, log, SessionEnded(reason="scored"), idem_key="session-ended:scored")
 
     def _last_system_text(
         self,
@@ -670,6 +898,10 @@ def _build_coverage_tracker(session_id: str, log: EventLog) -> CoverageTracker:
     """Rebuild CoverageTracker from SignalEmitted events (event-sourced)."""
     tracker = CoverageTracker()
     for env in log.get_session(session_id):
+        if isinstance(env.payload, ProblemCoverageObserved):
+            obs = env.payload
+            tracker.record(obs.problem_id, obs.dimension, obs.value)
+    for env in log.get_session(session_id):
         if isinstance(env.payload, SignalEmitted):
             sig = env.payload.signal
             # Attribute signal to current_problem_id at time of emission.
@@ -689,6 +921,21 @@ def _build_coverage_tracker(session_id: str, log: EventLog) -> CoverageTracker:
             sig = env.payload.signal
             tracker.record(ProblemId(current_pid), sig.dimension, sig.value)
     return tracker
+
+
+def _heuristic_coverage_value(dimension: Dimension, text: str) -> float:
+    """Small deterministic coverage heuristic for active-problem routing."""
+    lower = text.lower()
+    keywords: dict[Dimension, tuple[str, ...]] = {
+        Dimension.problem_framing: ("metric", "goal", "cohort", "define", "scope", "business"),
+        Dimension.model_rationale: ("model", "baseline", "feature", "trade-off", "because"),
+        Dimension.experiment_design: ("experiment", "validation", "holdout", "test", "power"),
+        Dimension.insight_interp: ("interpret", "result", "trend", "segment", "uncertainty"),
+        Dimension.communication: ("stakeholder", "recommend", "explain", "decision", "risk"),
+        Dimension.response_authenticity: ("assumption", "clarify", "example", "specific"),
+    }
+    hits = sum(1 for keyword in keywords.get(dimension, ()) if keyword in lower)
+    return min(1.0, 0.2 + (0.2 * hits)) if hits else 0.0
 
 
 def _count_probes_for_problem(

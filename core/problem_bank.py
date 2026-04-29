@@ -31,16 +31,20 @@ class ProblemBank:
     as possible within the requested 3-4 problem sequence.
     """
 
-    def __init__(self, entries: Sequence[ProblemBankEntry]) -> None:
+    def __init__(self, entries: Sequence[ProblemBankEntry], *, version: str = "unknown") -> None:
         if not entries:
             raise ProblemBankError("problem bank must contain at least one problem")
         ids = [entry.problem.id for entry in entries]
         if len(ids) != len(set(ids)):
             duplicates = sorted({pid for pid in ids if ids.count(pid) > 1})
             raise ProblemBankError(f"duplicate problem id(s): {', '.join(duplicates)}")
+        self.version = version
         self._entries: tuple[ProblemBankEntry, ...] = tuple(entries)
         self._tags_by_id: dict[ProblemId, tuple[str, ...]] = {
             entry.problem.id: entry.tags for entry in self._entries
+        }
+        self._by_id: dict[ProblemId, Problem] = {
+            entry.problem.id: entry.problem for entry in self._entries
         }
 
     @classmethod
@@ -65,7 +69,7 @@ class ProblemBank:
         if errors:
             joined = "; ".join(errors)
             raise ProblemBankError(f"{source}: {joined}")
-        return cls(entries)
+        return cls(entries, version=str(raw.get("version") or "unknown"))
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -78,6 +82,10 @@ class ProblemBank:
     def tags_for(self, problem_id: ProblemId) -> tuple[str, ...]:
         """Return tags for a problem, or an empty tuple if unknown."""
         return self._tags_by_id.get(problem_id, ())
+
+    def get(self, problem_id: ProblemId) -> Problem | None:
+        """Return a problem by id, if it exists in the bank."""
+        return self._by_id.get(problem_id)
 
     def pick_sequence(self, session_id: str, *, count: int | None = None) -> list[Problem]:
         """Return a deterministic, balanced sequence for ``session_id``.

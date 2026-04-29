@@ -1,0 +1,43 @@
+name: ds-ml-engineer-chat
+version: 1
+role: "Data Scientist / ML Engineer"
+description: >
+  Chat-mode rubric. Five dimensions. Voice-only response authenticity is excluded
+  from chat sessions and scored only by voice-specific workflows.
+
+dimensions:
+  - name: problem_framing
+    weight: 0.2045
+    description: >
+      Can the candidate translate the ambiguous business prompt into a concrete,
+      measurable data science task — naming the target, the unit of analysis,
+      and the success metric?
+
+  - name: model_rationale
+    weight: 0.25
+    description: >
+      Does the candidate justify modeling and feature choices against data and
+      stakeholder decisions? Trade-offs named; simple-first tried or explicitly ruled out.
+
+  - name: experiment_design
+    weight: 0.1705
+    description: >
+      Can the candidate describe an execution plan that would actually test the
+      hypothesis: validation strategy, failure modes, and operational trade-offs?
+
+  - name: insight_interpretation
+    weight: 0.1705
+    description: >
+      Do the candidate's stated conclusions correctly match what their model
+      and charts actually show? Claims anchored in outputs, not in hope.
+
+  - name: communication
+    weight: 0.2045
+    description: >
+      Can a non-technical stakeholder read the candidate's summary and know
+      what to do? Recommendation led; jargon glossed; uncertainty named.
+
+aggregation:
+  composite: weighted_mean
+  min_signals_per_dimension: 1
+  confidence_weighting: true

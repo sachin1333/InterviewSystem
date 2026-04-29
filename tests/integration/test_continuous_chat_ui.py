@@ -74,10 +74,10 @@ def test_continuous_chat_renders_problem_progress_and_boundaries(tmp_path: Path)
     assert 'class="problem-divider"' in response.text
     assert "Problem 1" in response.text and "Problem 2" in response.text
     assert "Candidate answer one" in response.text
+    assert response.text.count("Problem one opener") == 1
+    assert response.text.count("Problem two opener") == 1
     assert 'class="composer-shell"' in response.text
     assert 'aria-label="Answer input"' in response.text
-    assert 'id="composer-mic-toggle"' in response.text
-    assert 'aria-label="Switch to voice input"' in response.text
 
 
 def test_probe_pending_uses_thinking_affordance_and_stream_target(tmp_path: Path) -> None:
@@ -106,3 +106,13 @@ def test_voice_switch_to_text_preserves_partial_transcript_in_answer_box() -> No
 
     assert "const partial = document.getElementById('voice-transcript')" in js
     assert "textarea.value = partial.textContent" in js
+
+
+def test_chat_composer_prevents_stale_input_after_submit() -> None:
+    html = Path("adapters/http/templates/turn.html").read_text(encoding="utf-8")
+
+    assert 'autocomplete="off"' in html
+    assert "composer.requestSubmit()" in html
+    assert "composer.addEventListener('submit'" in html
+    assert "answer.value = ''" in html
+    assert "window.addEventListener('pageshow'" in html

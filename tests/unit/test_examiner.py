@@ -76,6 +76,25 @@ def test_examiner_returns_probe_outcome_from_llm_json() -> None:
     assert outcome.primitive_hint == "socratic_rebuttal"
 
 
+def test_examiner_uses_configured_task_tier_for_probe_decision() -> None:
+    tiers: list[str] = []
+
+    class _TierCapturingProvider:
+        def call(self, *, tier, prompt, stream=False, timeout=None):
+            del prompt, stream, timeout
+            tiers.append(tier)
+            return '{"action":"probe","text":"What trade-off worries you most?","rationale":"follow-up"}'
+
+    router = ModelRouter(_TierCapturingProvider(), sleep=lambda _: None)
+    examiner = LlmExaminer(router)
+
+    outcome, failure = examiner.review("sess-tier", [_turn()])
+
+    assert failure is None
+    assert outcome.action == "probe"
+    assert tiers == ["mid"]
+
+
 def test_examiner_returns_close_outcome() -> None:
     router = ModelRouter(
         _StaticProvider(
@@ -159,3 +178,35 @@ def test_examiner_injects_coverage_into_prompt() -> None:
     prompt = captured[0]
     assert "experiment_design" in prompt
     assert "Probes issued: 2 / 6" in prompt
+
+
+def test_coverage_context_includes_problem_guidance_in_prompt() -> None:
+    captured: list[str] = []
+
+    class _CapturingProvider:
+        def call(self, *, tier, prompt, stream=False, timeout=None):
+            del tier, stream, timeout
+            captured.append(prompt)
+            return '{"action":"probe","text":"Why?","rationale":"need more"}'
+
+    router = ModelRouter(_CapturingProvider(), sleep=lambda _: None)
+    examiner = LlmExaminer(router)
+    coverage = CoverageContext(
+        problem_id="p1",
+        under_served_dims=("problem_framing",),
+        signal_map={"problem_framing": 0.4},
+        probe_count=1,
+        max_probes=6,
+        problem_transcript="Candidate: I would define churn.",
+        problem_context="Look for metric clarity and cohort definition.",
+        target_dimensions=("problem_framing", "communication"),
+        expected_duration_s=420,
+    )
+
+    examiner.review("s1", [], coverage=coverage)
+
+    assert captured
+    prompt = captured[0]
+    assert "Look for metric clarity and cohort definition." in prompt
+    assert "Target dimensions: problem_framing, communication" in prompt
+    assert "Expected duration: 420s" in prompt

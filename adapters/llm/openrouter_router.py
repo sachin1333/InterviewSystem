@@ -14,7 +14,7 @@ from collections.abc import Generator, Iterable
 from http.client import HTTPResponse
 from typing import Literal
 from urllib import request as urllib_request
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 type Tier = Literal["cheap", "mid", "top"]
 
@@ -69,14 +69,30 @@ class OpenRouterRouter:
             },
             method="POST",
         )
+        if stream:
+            return self._stream_request(req, timeout=timeout)
+
         try:
             with urllib_request.urlopen(req, timeout=timeout) as resp:
-                if stream:
-                    return self._stream_response(resp)
                 body = json.loads(resp.read())
                 return body["choices"][0]["message"]["content"]  # type: ignore[no-any-return]
         except TimeoutError as exc:
             raise TimeoutError(f"openrouter timeout ({timeout}s)") from exc
+        except HTTPError as exc:
+            raise RuntimeError(self._format_http_error(exc)) from exc
+        except URLError as exc:
+            raise RuntimeError(f"openrouter error: {exc}") from exc
+
+    def _stream_request(
+        self, req: urllib_request.Request, *, timeout: float | None
+    ) -> Generator[str, None, None]:
+        try:
+            with urllib_request.urlopen(req, timeout=timeout) as resp:
+                yield from self._stream_response(resp)
+        except TimeoutError as exc:
+            raise TimeoutError(f"openrouter timeout ({timeout}s)") from exc
+        except HTTPError as exc:
+            raise RuntimeError(self._format_http_error(exc)) from exc
         except URLError as exc:
             raise RuntimeError(f"openrouter error: {exc}") from exc
 
@@ -96,3 +112,33 @@ class OpenRouterRouter:
                     yield delta
             except (json.JSONDecodeError, KeyError):
                 continue
+
+    @staticmethod
+    def _format_http_error(exc: HTTPError) -> str:
+        detail = ""
+        try:
+            raw = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            raw = ""
+        if raw:
+            detail = OpenRouterRouter._extract_error_detail(raw)
+        suffix = f": {detail}" if detail else ""
+        return f"openrouter error {exc.code} {exc.reason}{suffix}"
+
+    @staticmethod
+    def _extract_error_detail(raw: str) -> str:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw[:500]
+
+        if isinstance(parsed, dict):
+            error = parsed.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                if isinstance(message, str) and message:
+                    return message[:500]
+            message = parsed.get("message")
+            if isinstance(message, str) and message:
+                return message[:500]
+        return raw[:500]

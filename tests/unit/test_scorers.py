@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from adapters.llm.router import ModelRouter
 from adapters.scorer.llm_communication_scorer import LlmCommunicationScorer
+from adapters.scorer.llm_experiment_design_scorer import LlmExperimentDesignScorer
 from adapters.scorer.llm_rationale_scorer import LlmRationaleScorer
 from core.domain import Artifact, ArtifactKind, Dimension
 
@@ -81,3 +82,45 @@ def test_communication_scorer_uses_low_confidence_fallback_on_failure() -> None:
     assert result.signal.confidence == 0.2
     assert result.failure is not None
     assert result.failure.dimension is Dimension.communication
+
+
+def test_communication_scorer_uses_configured_mid_tier() -> None:
+    tiers: list[str] = []
+
+    class _TierCapturingProvider:
+        def call(self, *, tier, prompt, stream=False, timeout=None):
+            del prompt, stream, timeout
+            tiers.append(tier)
+            return (
+                '{"signals":[{"dimension":"communication","value":0.8,'
+                '"confidence":0.7,"source_refs":["artifact://artifact-1"]}]}'
+            )
+
+    router = ModelRouter(_TierCapturingProvider(), sleep=lambda _: None)
+    scorer = LlmCommunicationScorer(router)
+
+    result = scorer.score_optional("sess-tier", _artifact("Clear recommendation."))
+
+    assert result.failure is None
+    assert result.signal is not None
+    assert tiers == ["mid"]
+
+
+def test_experiment_design_scorer_scores_expected_dimension() -> None:
+    router = ModelRouter(
+        _StaticProvider(
+            '{"signals":[{"dimension":"experiment_design","value":0.7,'
+            '"confidence":0.8,"source_refs":["artifact-1"]}]}'
+        ),
+        sleep=lambda _: None,
+    )
+    scorer = LlmExperimentDesignScorer(router)
+
+    signal = scorer.score(
+        "s1",
+        _artifact("I would use holdout validation and guardrail metrics."),
+        Dimension.experiment_design,
+    )
+
+    assert signal.dimension == Dimension.experiment_design
+    assert signal.value == 0.7

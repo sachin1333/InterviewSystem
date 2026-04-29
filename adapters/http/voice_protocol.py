@@ -7,7 +7,8 @@ Client messages:
   - mode_switch: Switch between voice and text input (ends voice stream)
 
 Server messages:
-  - partial_transcript: STT output (before audio response)
+  - partial_transcript: STT output (before examiner response)
+  - examiner_text: examiner response text (sent even when TTS is disabled)
   - tts_chunk: TTS audio chunks of the examiner's response
   - stage_change: Transition to next interview stage
 
@@ -49,6 +50,16 @@ class ServerPartialTranscript(TypedDict):
     type: Literal["partial_transcript"]
     text: str
     is_final: bool
+
+
+class ServerExaminerText(TypedDict):
+    """Examiner response text, independent of text-to-speech audio.
+
+    Sent after the final candidate transcript so clients can render live
+    interviewer text even when TTS_MODE=off or audio playback is unavailable.
+    """
+    type: Literal["examiner_text"]
+    text: str
 
 
 class ServerTtsChunk(TypedDict):

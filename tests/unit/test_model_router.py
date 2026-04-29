@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Generator, Iterable
+
 from adapters.llm.router import CHEAP_TIMEOUT_PLACEHOLDER, ModelRouter
 
 
@@ -93,3 +95,50 @@ def test_call_json_retries_after_malformed_json() -> None:
         "turn_kind": "question",
     }
     assert provider.calls == 2
+
+
+class _AlwaysFailProvider:
+    def call(
+        self,
+        *,
+        tier: str,
+        prompt: str,
+        stream: bool = False,
+        timeout: float | None = None,
+    ) -> str:
+        del tier, prompt, stream, timeout
+        raise RuntimeError("provider rejected request")
+
+
+class _StreamingIteratorFailsProvider:
+    def call(
+        self,
+        *,
+        tier: str,
+        prompt: str,
+        stream: bool = False,
+        timeout: float | None = None,
+    ) -> Iterable[str]:
+        del tier, prompt, stream, timeout
+
+        def _chunks() -> Generator[str, None, None]:
+            raise RuntimeError("stream broke")
+            yield "unreachable"
+
+        return _chunks()
+
+
+def test_iter_streaming_returns_placeholder_when_provider_call_fails() -> None:
+    router = ModelRouter(_AlwaysFailProvider(), max_retries=1, sleep=lambda _: None)
+
+    chunks = list(router.iter_streaming(tier="mid", prompt="hello"))
+
+    assert chunks == [CHEAP_TIMEOUT_PLACEHOLDER]
+
+
+def test_iter_streaming_returns_placeholder_when_provider_iterator_fails() -> None:
+    router = ModelRouter(_StreamingIteratorFailsProvider(), max_retries=1, sleep=lambda _: None)
+
+    chunks = list(router.iter_streaming(tier="mid", prompt="hello"))
+
+    assert chunks == [CHEAP_TIMEOUT_PLACEHOLDER]

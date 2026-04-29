@@ -13,6 +13,7 @@ from core.events import (
     PerProblemScoreComputed,
     ProblemClosed,
     ProblemIntroduced,
+    ProblemPlanSelected,
     RuntimeExecuted,
     RuntimeFailed,
     ScoreComputed,
@@ -55,6 +56,8 @@ class _SessionRecord(TypedDict):
     artifact_turn: dict[str, str]
     # Phase 2.1 — problem tracking
     problems: list[Problem]
+    planned_problem_ids: tuple[ProblemId, ...]
+    problem_bank_version: str | None
     current_problem_id: ProblemId | None
     problem_status: dict[ProblemId, _ProblemStatus]
 
@@ -73,6 +76,8 @@ def _new_record() -> _SessionRecord:
         artifact_kind={},
         artifact_turn={},
         problems=[],
+        planned_problem_ids=(),
+        problem_bank_version=None,
         current_problem_id=None,
         problem_status={},
     )
@@ -125,6 +130,11 @@ class SessionStore:
                 )
             b["current_problem_id"] = pid
             b["problem_status"][pid] = _ProblemStatus.active
+        elif isinstance(payload, ProblemPlanSelected):
+            b = self._bucket(sid)
+            if not b["planned_problem_ids"]:
+                b["planned_problem_ids"] = payload.problem_ids
+                b["problem_bank_version"] = payload.bank_version
         elif isinstance(payload, ProblemClosed):
             b = self._bucket(sid)
             pid = payload.problem_id

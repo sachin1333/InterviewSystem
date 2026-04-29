@@ -1,0 +1,1 @@
+Reward concrete validation strategy, guardrail metrics, failure modes, operational constraints, and clear links between the experiment and the business decision. Penalize vague "run an A/B test" answers with no metric hierarchy, sample/power thinking, or rollout risk controls.

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Protocol
 
+from adapters.llm.task_tier_map import tier_for
 from core.contracts import Scorer
 from core.domain import Artifact, Dimension, Signal
 from core.events import ScorerFailed
@@ -35,6 +36,7 @@ class BaseLlmScorer(Scorer):
     heuristic_keywords: ClassVar[tuple[str, ...]]
     heuristic_hit_value: ClassVar[float]
     heuristic_miss_value: ClassVar[float]
+    task_key: ClassVar[str | None] = None
 
     def __init__(
         self,
@@ -63,7 +65,7 @@ class BaseLlmScorer(Scorer):
     def score_optional(self, session_id: str, artifact: Artifact) -> ScorerResult:
         try:
             payload = self.model_router.call_json(
-                tier="top",
+                tier=tier_for(self._task_key()),
                 prompt=self._compose_prompt(session_id, artifact),
                 schema={"signals"},
             )
@@ -110,6 +112,13 @@ class BaseLlmScorer(Scorer):
                 artifact.body,
             ]
         )
+
+    def _task_key(self) -> str:
+        if self.task_key is not None:
+            return self.task_key
+        if self.dimension is Dimension.model_rationale:
+            return "scorer.rationale"
+        return f"scorer.{self.dimension.value}"
 
     def _load_template(self, name: str) -> str:
         path = self.templates_root / name

@@ -253,6 +253,8 @@ class VoiceInterface {
     this.audioSeq = 0;
     this.isSending = false;
     this.pressing = false;   // PTT: true while button held
+    this.pendingEndOfStream = false;
+    this.connectionPromise = null;
     this.status = 'idle'; // idle, listening, speaking, error
     this.voiceMode = false;
     this.allowTextSwitch = false;
@@ -281,18 +283,32 @@ class VoiceInterface {
     const startSpeaking = async () => {
       if (this.pressing) return;
       this.pressing = true;
+      this.pendingEndOfStream = false;
       this.audioSeq = 0;
       btn.classList.add('pressed');
       try {
+        await this.connectWebSocket();
+        if (!this.pressing) {
+          if (this.pendingEndOfStream) {
+            this.sendEndOfStream();
+          }
+          this.setStatus('idle');
+          return;
+        }
         await this.mic.start();
         this._setupMicCallbacks();
-        this.connectWebSocket();
+        if (!this.pressing) {
+          this.sendEndOfStream();
+          this.mic.stop();
+          this.setStatus('idle');
+          return;
+        }
         this.setStatus('listening');
       } catch (err) {
         console.error('Mic error:', err);
         this.pressing = false;
         btn.classList.remove('pressed');
-        this.setStatus('error');
+        this.setStatus('error', 'Connection error');
       }
     };
 
@@ -300,7 +316,11 @@ class VoiceInterface {
       if (!this.pressing) return;
       this.pressing = false;
       btn.classList.remove('pressed');
-      this.sendEndOfStream();
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isSending) {
+        this.sendEndOfStream();
+      } else {
+        this.pendingEndOfStream = true;
+      }
       this.mic.stop();
       this.setStatus('idle');
     };
@@ -323,42 +343,71 @@ class VoiceInterface {
   }
 
   connectWebSocket() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      return Promise.resolve();
+    }
+    if (this.connectionPromise) {
+      return this.connectionPromise;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${window.location.host}/ws/sessions/${this.sessionId}/voice`;
 
     this.ws = new WebSocket(url);
     this.ws.binaryType = 'arraybuffer';
 
-    this.ws.onopen = () => {
-      console.log('WebSocket connected');
-      this.isSending = true;
-      this.audioSeq = 0;
-      this.bargingIn = false;
-    };
+    this.connectionPromise = new Promise((resolve, reject) => {
+      this.ws.onopen = () => {
+        console.log('WebSocket connected');
+        this.isSending = true;
+        this.audioSeq = 0;
+        this.bargingIn = false;
+        this.connectionPromise = null;
+        if (this.pendingEndOfStream) {
+          this.sendEndOfStream();
+        }
+        resolve();
+      };
+
+      this.ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        this.connectionPromise = null;
+        this.setStatus('error', 'Connection error');
+        reject(err);
+      };
+    });
 
     this.ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       this.handleServerMessage(msg);
     };
 
-    this.ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
-      this.setStatus('error');
-    };
-
     this.ws.onclose = () => {
       console.log('WebSocket closed');
       this.isSending = false;
+      this.connectionPromise = null;
+      this.setStatus('closed', 'Connection closed');
     };
+
+    return this.connectionPromise;
   }
 
   handleServerMessage(msg) {
     if (msg.type === 'partial_transcript') {
       this.updateTranscript(msg.text, msg.is_final);
+    } else if (msg.type === 'examiner_text') {
+      this.updateExaminerText(msg.text);
     } else if (msg.type === 'tts_chunk') {
       this.handleTtsChunk(msg.pcm_b64, msg.end_of_utterance);
     } else if (msg.type === 'stage_change') {
       this.handleStageChange(msg.show_text_panel);
+    }
+  }
+
+  updateExaminerText(text) {
+    const transcript = document.getElementById('voice-transcript');
+    if (transcript) {
+      transcript.textContent = `Interviewer: ${text}`;
     }
   }
 
@@ -415,6 +464,7 @@ class VoiceInterface {
     if (!this.isSending || this.ws.readyState !== WebSocket.OPEN) return;
 
     this.isSending = false;
+    this.pendingEndOfStream = false;
     const msg = {
       type: 'audio_chunk',
       seq: -1,
@@ -464,11 +514,11 @@ class VoiceInterface {
     }
   }
 
-  setStatus(newStatus) {
+  setStatus(newStatus, label = null) {
     this.status = newStatus;
     const statusChip = document.getElementById('voice-status');
     if (statusChip) {
-      statusChip.textContent = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+      statusChip.textContent = label || (newStatus.charAt(0).toUpperCase() + newStatus.slice(1));
       statusChip.className = `voice-status status-${newStatus}`;
     }
   }

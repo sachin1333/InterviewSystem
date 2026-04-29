@@ -13,9 +13,9 @@ from adapters.scorer.aggregator import RubricAggregator
 from core.case_bank import CaseBank
 
 
-def test_probe_sse_streams_tokens(tmp_path: Path) -> None:
+def test_probe_sse_streams_persisted_probe_text(tmp_path: Path) -> None:
     bank = CaseBank.from_yaml(Path("templates/cases/cold_start_bank.yaml"))
-    fake = FakeRouter(scripted_streams=[["What ", "would ", "you ", "do ", "next?"]])
+    fake = FakeRouter()
     router = ModelRouter(fake)
     log = SqliteEventLog(str(tmp_path / "log.db"))
     aggregator = RubricAggregator.from_yaml(
@@ -40,4 +40,4 @@ def test_probe_sse_streams_tokens(tmp_path: Path) -> None:
     with client.stream("GET", f"/sessions/{session_id}/probe-stream") as stream:
         chunks = [line for line in stream.iter_lines() if line.startswith("data: ")]
     body = "".join(c.removeprefix("data: ") for c in chunks)
-    assert "What" in body and "next" in body
+    assert "Please clarify your assumptions" in body

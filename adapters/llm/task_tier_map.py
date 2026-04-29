@@ -10,7 +10,7 @@ type Tier = Literal["cheap", "mid", "top"]
 
 TASK_TIER_MAP: dict[str, Tier] = {
     "challenger.draft": "top",
-    "examiner.probe": "top",
+    "examiner.probe": "mid",
     "scorer.rationale": "top",
     "scorer.communication": "mid",
     "scorer.insight_interp": "top",

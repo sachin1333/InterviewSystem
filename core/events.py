@@ -239,6 +239,14 @@ class ProblemIntroduced(_Evt):
     ordinal: int = Field(ge=1)
 
 
+class ProblemPlanSelected(_Evt):
+    """Durable per-session problem sequence selected from an explicit source."""
+
+    problem_ids: tuple[ProblemId, ...]
+    bank_version: str | None = None
+    source: Literal["explicit", "problem_bank"]
+
+
 class ProblemClosed(_Evt):
     """Fired when the examiner decides the current problem is done.
 
@@ -270,6 +278,17 @@ class CoverageSnapshot(_Evt):
     under_served: list[str]        # Dimension.values that are below threshold
 
 
+class ProblemCoverageObserved(_Evt):
+    """Durable problem-scoped coverage signal used for examiner routing."""
+
+    problem_id: ProblemId
+    artifact_id: str
+    dimension: Dimension
+    value: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    source: Literal["coverage_heuristic"] = "coverage_heuristic"
+
+
 EVENT_TYPES: set[type] = {
     # lifecycle
     SessionStarted, CandidateJoined, SessionResumed, SessionEnded, SessionTimedOut,
@@ -292,9 +311,9 @@ EVENT_TYPES: set[type] = {
     # case stages (legacy - kept for replay of Phase alpha-theta sessions)
     StageEntered, StageCompleted,
     # Phase 2.1: problem boundaries
-    ProblemIntroduced, ProblemClosed,
+    ProblemIntroduced, ProblemPlanSelected, ProblemClosed,
     # Phase 2.2: coverage tracker snapshot
-    CoverageSnapshot,
+    CoverageSnapshot, ProblemCoverageObserved,
 }
 
 

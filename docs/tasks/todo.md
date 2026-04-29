@@ -1,3 +1,73 @@
+# Current Task — RCA: Chat-Based Interview Workflow End-to-End
+
+**Date:** 2026-04-29
+**Scope:** Investigation and recommendations only. Do not implement code changes.
+
+## Investigation plan
+- [x] Map the end-to-end chat interview flow from candidate start through final result.
+- [x] Trace durable state transitions and event-log writes across HTTP routes, session runner, domain events, orchestrator, examiner/challenger/scorers, runtime, and UI templates.
+- [x] Reproduce or inspect tests covering the critical chat path, including problem-bank progression, first answer, follow-up, code execution, completion, and result generation.
+- [x] Identify root causes, not symptoms, with file/line evidence and downstream impact.
+- [x] Propose solutions and verification strategy without implementing them.
+
+## Review
+
+### Workflow map
+1. `POST /sessions` writes `SessionStarted` and `CandidateJoined`, then redirects to `GET /sessions/{id}`.
+2. `GET /sessions/{id}` calls `SessionRunner.advance()`, which mutates the event log by introducing problems/challenges, probing, executing code, scoring, aggregating, or ending.
+3. `POST /sessions/{id}/turn` writes candidate `TurnPosted`, optional markdown/code artifacts, and timing, then redirects to `GET /sessions/{id}`.
+4. `SessionRunner.advance()` replays state, lets `ProblemSequencer` introduce/close problems, delegates to the pure orchestrator for legacy actions, and calls adapters for examiner/scoring/runtime side effects.
+5. `turn.html` renders event-log-derived chat messages and optionally opens `/probe-stream` when an examiner probe has no artifact.
+6. `GET /sessions/{id}/result` replays `ScoreComputed` / `PerProblemScoreComputed` and renders feedback.
+
+### RCA findings
+- **P0:** `POST /turn` accepts writes for ended or unknown sessions. Evidence: route writes candidate turns without replay-state guards before append. Impact: event-log invariants can be violated (`SessionEnded` is not terminal), and arbitrary session IDs can acquire candidate turns without `SessionStarted` / `CandidateJoined`.
+- **P0:** Candidate turn submission is a non-atomic multi-event write and ignores the envelope returned by idempotent append. Evidence: a retry after `TurnPosted` succeeds but before artifacts are written can attach artifacts to a newly generated, non-existent turn ID. Impact: candidate answers become orphaned/invisible and the FSM can wedge.
+- **P0:** Side-effecting `GET /sessions/{id}` is not same-session concurrency safe. Evidence: concurrent GETs can both advance from the same snapshot and append duplicate challenger turns. Impact: refresh/prefetch/double-open can duplicate interviewer messages or throw append conflicts.
+- **P1:** Empty submissions create candidate turns with no candidate artifact. Impact: answer count advances while no scorable evidence exists, producing a no-op/wedged session or invisible candidate turn.
+- **P1:** SSE probe streaming is not event-sourced. Evidence: `/probe-stream` calls `examiner.iter_review()` and streams bytes without appending an `ArtifactAttached`; `LlmExaminer.iter_review()` also discards recent turns and coverage. Impact: streamed interviewer text is lost on reload and can contradict the persisted examiner decision.
+- **P1:** Examiner failure path posts an empty probe turn. Evidence: failure outcome has `ok_to_advance=True` but `action='probe'`; runner then posts a probe with no artifact. Impact: the candidate is asked to answer a follow-up they may never see, often stuck at “Thinking…”.
+- **P1:** Coverage-driven problem closure is currently mostly aspirational. Evidence: coverage is rebuilt from `SignalEmitted` events, but chat scoring runs after all problems are closed; signals have no first-class `problem_id`. Impact: examiner coverage context is empty during active problems, so closure depends on LLM judgment or max-probe cap rather than measured rubric coverage.
+- **P1:** Production rubric/scorer configuration is incomplete. Evidence: rubric has six dimensions, while `create_app()` scores/configures only four for chat. Impact: final composite is calculated over partial evidence and reports insufficient dimensions for unscored rubric areas.
+- **P2:** Problem plans are not durably selected at session start. Evidence: `SessionRunner._planned_problems()` recomputes from the current `ProblemBank` on every advance. Impact: a bank edit/deploy during a session can change remaining problems and progress totals.
+- **P2:** Problem-bank context is not injected into examiner prompts. Impact: follow-ups see the opener/transcript but miss hidden interviewer guidance, target dimensions, and expected duration.
+
+### Verification performed
+- Corrected an initial wrong-path pytest command and reran focused chat suites successfully: `rtk uv run pytest -q tests/integration/test_problem_bank_session.py tests/integration/test_continuous_chat_ui.py tests/integration/test_http_double_submit.py tests/integration/test_e2e_crash_resume.py` -> 11 passed.
+- Full suite: `rtk uv run pytest -q` -> passed (100%).
+- One-off debug probes reproduced the uncovered failure modes above without changing implementation code.
+
+
+### Implementation plan
+- [x] Detailed implementation plan written to `docs/superpowers/plans/2026-04-29-chat-workflow-rca-fixes.md`.
+- [x] Implementation completed on branch `codex/chat-workflow-rca-fixes`.
+
+### Implementation review
+- Added guarded candidate submission: unknown sessions return 404, ended sessions redirect to result without mutation, blank submissions return 400, and idempotent retries reuse the persisted candidate turn ID.
+- Added deterministic idempotency keys for system-generated interviewer turns, probes, scores, problem boundaries, and session end events; concurrent GET regression coverage now proves duplicate prompts are not emitted.
+- Added `ProblemPlanSelected` so problem-bank sessions persist their selected problem IDs and bank version once.
+- Changed probe SSE to stream persisted examiner artifacts only, and added deterministic fallback probe text for examiner failures.
+- Added `ProblemCoverageObserved`, heuristic active-problem coverage emission, and richer examiner coverage context with problem guidance, target dimensions, and expected duration.
+- Added chat-specific rubric `templates/rubrics/ds-ml-engineer-chat-v1.yaml` and `LlmExperimentDesignScorer`, aligning chat scored dimensions with the loaded chat rubric and excluding voice-only authenticity from chat composites.
+- Updated README with chat rubric and idempotency invariants.
+
+### Implementation verification
+- RED checks observed for new guard/concurrency/plan/probe/coverage/rubric tests before implementation.
+- Focused regression suite: `rtk uv run pytest -q tests/integration/test_chat_turn_submission_guards.py tests/integration/test_chat_advance_idempotency.py tests/integration/test_problem_plan_persistence.py tests/integration/test_probe_persistence.py tests/integration/test_problem_coverage_flow.py tests/integration/test_problem_bank_session.py tests/integration/test_continuous_chat_ui.py tests/integration/test_http_double_submit.py tests/integration/test_e2e_crash_resume.py tests/integration/test_e2e_concurrent.py tests/unit/test_events.py tests/unit/test_problem_bank.py tests/unit/test_examiner.py tests/unit/test_scorers.py tests/unit/test_coverage.py` -> passed.
+- Static checks: `rtk uv run ruff check ...` -> pass; `rtk uv run mypy ...` -> pass.
+- Full suite: `rtk uv run pytest -q` -> passed.
+
+### Recommended solution direction
+- Make candidate submission a guarded command: require existing active session, reject ended sessions, reject empty submissions, and persist turn+artifacts atomically or with a single idempotent command envelope that reuses the stored turn ID on retry.
+- Move side-effecting advancement behind an idempotent per-session command/lock, or make `GET` render-only and trigger advancement through explicit POST/background worker with idempotency keys.
+- Persist streamed examiner output as the canonical artifact, or remove SSE as a separate model call and stream from the same persisted examiner command.
+- Replace empty examiner-failure probes with a deterministic persisted fallback prompt or a problem close with auditable failure reason.
+- Introduce first-class problem attribution for signals and a lightweight off-critical-path coverage pipeline before examiner close decisions.
+- Align rubric dimensions, scorer registry, and chat/voice modality policy; either score all rubric dimensions or make omitted dimensions explicitly non-applicable.
+- Persist the selected problem plan/version at session start and include problem context/targets in examiner coverage prompts.
+
+---
+
 # Plan — Fast Conversational Voice/Text Interview Updates
 
 **Date:** 2026-04-26

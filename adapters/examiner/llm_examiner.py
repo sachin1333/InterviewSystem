@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from adapters.llm.task_tier_map import tier_for
 from core.contracts import Examiner
 from core.domain import Dimension, Signal, Turn
 from core.events import ExaminerFailed
@@ -61,6 +62,9 @@ class CoverageContext:
     probe_count: int = 0
     max_probes: int = 6
     problem_transcript: str = ""
+    problem_context: str = ""
+    target_dimensions: tuple[str, ...] = ()
+    expected_duration_s: int = 0
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,7 @@ class LlmExaminer(Examiner):
         for attempt in range(2):
             try:
                 payload = self.model_router.call_json(
-                    tier="top",
+                    tier=tier_for("examiner.probe"),
                     prompt=prompt,
                     schema=schema,
                     deadline_ms=2000,
@@ -290,6 +294,12 @@ def _format_coverage_context(ctx: CoverageContext) -> str:
         f"Problem: {ctx.problem_id or '(unknown)'}",
         f"Probes issued: {ctx.probe_count} / {ctx.max_probes}",
     ]
+    if ctx.problem_context:
+        lines.append("Problem guidance: " + ctx.problem_context)
+    if ctx.target_dimensions:
+        lines.append("Target dimensions: " + ", ".join(ctx.target_dimensions))
+    if ctx.expected_duration_s:
+        lines.append(f"Expected duration: {ctx.expected_duration_s}s")
     if ctx.under_served_dims:
         lines.append(
             "Under-served dimensions (prioritise these): "
