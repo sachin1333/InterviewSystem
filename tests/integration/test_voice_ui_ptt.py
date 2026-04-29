@@ -16,7 +16,12 @@ from adapters.llm.router import ModelRouter
 from adapters.scorer.aggregator import RubricAggregator
 
 
-def _make_client(tmp_path: Path, *, voice_mode: str = "on") -> tuple[TestClient, str]:
+def _make_client(
+    tmp_path: Path,
+    *,
+    voice_mode: str = "on",
+    with_voice_runner: bool = False,
+) -> tuple[TestClient, str]:
     fake = FakeRouter()
     router = ModelRouter(fake)
     log = SqliteEventLog(str(tmp_path / "log.db"))
@@ -28,7 +33,13 @@ def _make_client(tmp_path: Path, *, voice_mode: str = "on") -> tuple[TestClient,
         challenger=LlmChallenger(router),
         aggregator=aggregator,
     )
-    app = make_app(log=log, runner=runner, output_dir=tmp_path, voice_mode=voice_mode)
+    app = make_app(
+        log=log,
+        runner=runner,
+        output_dir=tmp_path,
+        voice_mode=voice_mode,
+        voice_runner=object() if with_voice_runner else None,  # type: ignore[arg-type]
+    )
     client = TestClient(app, raise_server_exceptions=True)
     r = client.post("/sessions", data={"candidate_handle": "x"}, follow_redirects=True)
     session_id = r.url.path.rsplit("/", 1)[-1]
@@ -37,7 +48,7 @@ def _make_client(tmp_path: Path, *, voice_mode: str = "on") -> tuple[TestClient,
 
 def test_ptt_button_present_in_voice_mode(tmp_path: Path) -> None:
     """PTT button rendered when active_mode=voice."""
-    client, session_id = _make_client(tmp_path, voice_mode="on")
+    client, session_id = _make_client(tmp_path, voice_mode="on", with_voice_runner=True)
     r = client.get(f"/sessions/{session_id}")
     assert r.status_code == 200
     assert 'data-mic="ptt"' in r.text
@@ -62,6 +73,23 @@ def test_ptt_button_absent_from_voice_off_sessions(tmp_path: Path) -> None:
     assert 'data-voice-mode="off"' in r.text
 
 
+def test_voice_mode_on_without_runner_renders_inactive_voice_bar(tmp_path: Path) -> None:
+    """Configured voice_mode=on is inactive unless a voice runner exists."""
+    client, session_id = _make_client(tmp_path, voice_mode="on", with_voice_runner=False)
+    r = client.get(f"/sessions/{session_id}")
+    assert r.status_code == 200
+    assert 'data-voice-mode="off"' in r.text
+
+
+def test_voice_status_markup_rendered_in_active_voice_bar(tmp_path: Path) -> None:
+    """Voice UI exposes a status element for WS lifecycle feedback."""
+    client, session_id = _make_client(tmp_path, voice_mode="on", with_voice_runner=True)
+    r = client.get(f"/sessions/{session_id}")
+    assert r.status_code == 200
+    assert 'id="voice-status"' in r.text
+    assert 'aria-live="polite"' in r.text
+
+
 def test_ptt_js_uses_pointerdown_not_vad(tmp_path: Path) -> None:
     """Served voice.js uses pointerdown (PTT) not VAD continuous start."""
     client, _sid = _make_client(tmp_path, voice_mode="on")
@@ -73,3 +101,25 @@ def test_ptt_js_uses_pointerdown_not_vad(tmp_path: Path) -> None:
     assert "await this.mic.start()" not in js or "_setupPTT" in js, (
         "mic should only start via PTT handler, not in initialize()"
     )
+
+
+def test_ptt_js_reports_ws_close_and_error_status(tmp_path: Path) -> None:
+    """Served voice.js displays explicit WebSocket close/error status text."""
+    client, _sid = _make_client(tmp_path, voice_mode="on")
+    r = client.get("/static/voice.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "Connection error" in js
+    assert "Connection closed" in js
+
+
+def test_ptt_js_waits_for_ws_open_and_preserves_quick_release_eos(tmp_path: Path) -> None:
+    """PTT must not mark sending before open and must flush EOS after quick release."""
+    client, _sid = _make_client(tmp_path, voice_mode="on")
+    r = client.get("/static/voice.js")
+    assert r.status_code == 200
+    js = r.text
+    assert "await this.connectWebSocket()" in js
+    assert "pendingEndOfStream" in js
+    assert "this.isSending = true" in js
+    assert js.index("this.ws.onopen") < js.index("this.isSending = true")

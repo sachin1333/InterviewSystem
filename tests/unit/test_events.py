@@ -22,7 +22,9 @@ from core.events import (
     LatencyObserved,
     PerProblemScoreComputed,
     ProblemClosed,
+    ProblemCoverageObserved,
     ProblemIntroduced,
+    ProblemPlanSelected,
     ProfileIngested,
     RuntimeExecuted,
     RuntimeFailed,
@@ -141,9 +143,9 @@ def test_event_types_registry_covers_all_payloads():
         # case stages (legacy — replay only)
         StageEntered, StageCompleted,
         # Phase 2.1: problem boundaries
-        ProblemIntroduced, ProblemClosed,
+            ProblemIntroduced, ProblemPlanSelected, ProblemClosed,
         # Phase 2.2: coverage tracker snapshot
-        CoverageSnapshot,
+            CoverageSnapshot, ProblemCoverageObserved,
     }
     assert expected == EVENT_TYPES
 

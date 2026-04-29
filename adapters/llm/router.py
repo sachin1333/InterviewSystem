@@ -168,16 +168,22 @@ class ModelRouter:
         """Yield token chunks as they arrive from the provider.
 
         Unlike call_streaming_with_metrics this does not consume the iterator
-        internally — it forwards each chunk so HTTP/SSE handlers can flush.
+        internally — it forwards each chunk so HTTP/SSE handlers can flush. If
+        the upstream provider fails before or during iteration, degrade to the
+        deterministic placeholder so SSE responses can close cleanly instead of
+        raising after HTTP 200 has already been sent.
         """
-        iterator = self.call(tier=tier, prompt=prompt, stream=True)
-        if isinstance(iterator, str):
-            if iterator:
-                yield iterator
-            return
-        for chunk in iterator:
-            if chunk:
-                yield chunk
+        try:
+            iterator = self.call(tier=tier, prompt=prompt, stream=True)
+            if isinstance(iterator, str):
+                if iterator:
+                    yield iterator
+                return
+            for chunk in iterator:
+                if chunk:
+                    yield chunk
+        except Exception:
+            yield from self._placeholder_response(stream=True)
 
     def _get_timeout(self, tier: Tier) -> float:
         return {

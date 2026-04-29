@@ -230,7 +230,7 @@ def test_voice_ws_not_configured_rejects(tmp_path: Path) -> None:
         raise AssertionError("Expected WebSocketDisconnect with code 1011")
 
 
-def test_voice_ws_tts_off_emits_no_tts_chunks(tmp_path: Path) -> None:
+def test_voice_ws_tts_off_emits_examiner_text_without_tts_chunks(tmp_path: Path) -> None:
     log = SqliteEventLog(tmp_path / "log.db")
     http_router = ModelRouter(FakeRouter())
     rubric = load_rubric(yaml_str=_MINI_RUBRIC)
@@ -255,10 +255,15 @@ def test_voice_ws_tts_off_emits_no_tts_chunks(tmp_path: Path) -> None:
         seen_transcript = False
         seen_stage = False
         seen_tts = False
+        examiner_text: str | None = None
+        message_order: list[str] = []
         for _ in range(5):
             msg = ws.receive_json()
+            message_order.append(msg["type"])
             if msg["type"] == "partial_transcript":
                 seen_transcript = True
+            elif msg["type"] == "examiner_text":
+                examiner_text = msg["text"]
             elif msg["type"] == "stage_change":
                 seen_stage = True
                 break
@@ -266,5 +271,9 @@ def test_voice_ws_tts_off_emits_no_tts_chunks(tmp_path: Path) -> None:
                 seen_tts = True
 
         assert seen_transcript
+        assert examiner_text is not None
+        assert "Generated prompt" in examiner_text
         assert seen_stage
         assert not seen_tts
+        assert message_order.index("partial_transcript") < message_order.index("examiner_text")
+        assert message_order.index("examiner_text") < message_order.index("stage_change")

@@ -22,7 +22,11 @@ The candidate flow:
 1. Land on `/`, enter a handle, click **Start interview**.
 2. The Challenger LLM proposes a real-world DS/ML scenario (or a canned prompt if the model misses its 8s deadline).
 3. Chat back and forth — interviewer bubbles on the left, your replies on the right. `Enter` sends, `Shift+Enter` newlines, `+ add code` reveals an optional Python cell that runs in a sandboxed subprocess.
-4. When the answer budget is hit, the configured scorers run, the rubric aggregator writes `outputs/{session_id}_feedback.md`, and you're redirected to the result page.
+4. When the answer budget is hit, the configured chat scorers run, the rubric aggregator writes `outputs/{session_id}_feedback.md`, and you're redirected to the result page.
+
+Chat sessions use `templates/rubrics/ds-ml-engineer-chat-v1.yaml`, which scores five chat-observable dimensions. Voice-only `response_authenticity` remains part of the voice workflow and is not included in chat composites.
+
+Candidate turn submission is idempotent by `turn_nonce`; retries after partial writes reuse the originally stored turn ID so artifacts cannot become orphaned. System-generated interviewer turns use deterministic idempotency keys so refreshes/concurrent GETs do not duplicate prompts.
 
 Tests: `uv run pytest` (127 unit tests, no network).
 

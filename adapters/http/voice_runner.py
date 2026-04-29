@@ -47,6 +47,7 @@ class VoiceTurnResult:
     turn_id: str
     case_stage: str
     transcript: str
+    examiner_text: str
     audio_stream: AsyncIterator[bytes]
     ttft_ms: int  # LLM time-to-first-token
     end_to_end_ms: int
@@ -242,6 +243,7 @@ class VoiceRunner:
             turn_id=candidate_turn_id,
             case_stage=stage.id,
             transcript=transcript,
+            examiner_text=text_for_tts,
             audio_stream=_audio_with_timing(),
             ttft_ms=llm_ttft_ms,
             end_to_end_ms=int((self.clock() - run_started) * 1000),

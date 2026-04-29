@@ -112,31 +112,16 @@
           <div class="bubble thinking" id="probe-stream-text" aria-live="polite">Thinking…</div>
         </div>
       </div>
-      <script>
-      (() => {
-        const target = document.getElementById('probe-stream-text');
-        const es = new EventSource("/sessions/{{ session_id }}/probe-stream");
-        let buf = "";
-        es.onmessage = (e) => {
-          if (e.data === "[DONE]") { es.close(); return; }
-          buf += e.data;
-          target.classList.remove('thinking');
-          target.textContent = buf;
-          document.getElementById('chat').scrollTop = 1e9;
-        };
-        es.addEventListener('done', () => es.close());
-      })();
-      </script>
       {% endif %}
     </main>
 
     <details class="composer-shell" data-mode="text" {% if active_mode == 'text' %}open{% endif %}>
       <summary>Answer composer</summary>
-      <form class="composer" method="post" action="/sessions/{{ session_id }}/turn" id="composer">
+      <form class="composer" method="post" action="/sessions/{{ session_id }}/turn" id="composer" autocomplete="off">
         <input type="hidden" name="turn_nonce" value="{{ turn_nonce }}">
         <div class="row">
           {% if voice_mode %}<button type="button" id="composer-mic-toggle" class="composer-mic" aria-label="Switch to voice input">🎤</button>{% endif %}
-          <textarea id="answer" name="answer" rows="2" autofocus aria-label="Answer input"
+          <textarea id="answer" name="answer" rows="2" autofocus aria-label="Answer input" autocomplete="off"
             placeholder="{% if turn_kind == 'defense' %}Respond to the follow-up…{% else %}Type your answer…{% endif %}"></textarea>
           <button type="submit" class="send-btn" aria-label="Send answer">Send</button>
         </div>
@@ -144,13 +129,15 @@
           + add code
         </button>
         <div class="code-area" id="code-wrap">
-          <textarea id="code" name="code" rows="6" aria-label="Optional Python code" placeholder="# Optional Python code (will be executed)"></textarea>
+          <textarea id="code" name="code" rows="6" aria-label="Optional Python code" autocomplete="off" placeholder="# Optional Python code (will be executed)"></textarea>
         </div>
       </form>
     </details>
 
-    <div id="voice-bar" class="voice-bar" data-voice-mode="{{ 'on' if (voice_mode and active_mode == 'voice') else 'off' }}" data-voice-policy="{{ voice_mode_setting }}" data-allow-text-switch="{{ 'true' if allow_text_switch else 'false' }}">
+    {% set voice_runner_available = request.app.state.voice_runner is not none %}
+    <div id="voice-bar" class="voice-bar" data-voice-mode="{{ 'on' if (voice_mode and voice_runner_available and active_mode == 'voice') else 'off' }}" data-voice-policy="{{ voice_mode_setting }}" data-allow-text-switch="{{ 'true' if (allow_text_switch and voice_runner_available) else 'false' }}">
       <button type="button" id="mic-btn" class="mic-btn" data-mic="ptt" aria-label="Hold to speak">🎤 Hold to speak</button>
+      <div id="voice-status" class="voice-status status-idle" aria-live="polite">Idle</div>
       <div id="voice-transcript" class="voice-transcript" aria-live="polite"></div>
     </div>
   </div>
@@ -159,11 +146,33 @@
     const chat = document.getElementById('chat');
     chat.scrollTop = chat.scrollHeight;
     const answer = document.getElementById('answer');
+    const code = document.getElementById('code');
     const composer = document.getElementById('composer');
+    const sendButton = composer.querySelector('button[type="submit"]');
+    composer.addEventListener('submit', () => {
+      if (sendButton) {
+        sendButton.disabled = true;
+        sendButton.textContent = 'Sending…';
+      }
+      window.setTimeout(() => {
+        answer.value = '';
+        answer.style.height = 'auto';
+        if (code) code.value = '';
+      }, 0);
+    });
+    window.addEventListener('pageshow', () => {
+      answer.value = '';
+      answer.style.height = 'auto';
+      if (code) code.value = '';
+      if (sendButton) {
+        sendButton.disabled = false;
+        sendButton.textContent = 'Send';
+      }
+    });
     answer.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        if (answer.value.trim()) composer.submit();
+        if (answer.value.trim()) composer.requestSubmit();
       }
     });
     answer.addEventListener('input', () => {

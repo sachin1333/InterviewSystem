@@ -29,7 +29,13 @@ def _make_voice_client(tmp_path: Path) -> tuple[TestClient, str]:
         ).LlmChallenger(router),
         aggregator=aggregator,
     )
-    app = make_app(log=log, runner=runner, output_dir=tmp_path, voice_mode="on")
+    app = make_app(
+        log=log,
+        runner=runner,
+        output_dir=tmp_path,
+        voice_mode="on",
+        voice_runner=object(),  # type: ignore[arg-type]
+    )
     client = TestClient(app, raise_server_exceptions=True)
     r = client.post("/sessions", data={"candidate_handle": "x"}, follow_redirects=True)
     session_id = r.url.path.rsplit("/", 1)[-1]

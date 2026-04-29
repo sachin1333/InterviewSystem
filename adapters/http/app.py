@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, cast
 
-from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,6 +29,7 @@ from adapters.http.session_runner import SessionRunner
 from adapters.http.voice_protocol import (
     ClientAudioChunk,
     ClientModeSwitch,
+    ServerExaminerText,
     ServerPartialTranscript,
     ServerStageChange,
     ServerTtsChunk,
@@ -83,7 +84,7 @@ def _conversation_messages(session_id: str, log: EventLog) -> list[dict[str, str
         if isinstance(payload, ProblemIntroduced):
             out.append({
                 "role": "boundary",
-                "text": f"Problem {payload.ordinal}: {payload.opener_text}",
+                "text": f"Problem {payload.ordinal}",
             })
         elif isinstance(payload, TurnPosted):
             chunks = artifacts_by_turn.get(payload.id, [])
@@ -116,7 +117,9 @@ def _problem_progress(session_id: str, log: EventLog, runner: SessionRunner) -> 
     if ordinal is None:
         return None
 
-    planned_total = len(runner.problems)
+    planned_total = len(record.get("planned_problem_ids", ()))
+    if planned_total == 0:
+        planned_total = len(runner.problems)
     if planned_total == 0 and runner.problem_bank is not None:
         planned_total = len(runner.problem_bank.pick_sequence(session_id))
     total = max(planned_total, ordinal)
@@ -135,6 +138,15 @@ def _probe_stream_pending(session_id: str, log: EventLog) -> bool:
         if turn["actor"] == Actor.examiner and turn["kind"] == TurnKind.probe:
             return not any(tid == turn["id"] for tid in s["artifact_turn"].values())
     return False
+
+
+def _session_record_or_404(session_id: str, log: EventLog) -> dict[str, object]:
+    """Return a started session projection or reject invalid candidate writes."""
+    sessions, _, _, _, _ = replay(session_id, log)
+    record = sessions.get(session_id)
+    if record is None or record.get("started_at") is None:
+        raise HTTPException(status_code=404, detail="unknown session")
+    return cast(dict[str, object], record)
 
 
 def make_app(
@@ -235,7 +247,8 @@ def make_app(
         problem_progress = _problem_progress(session_id, _log, _runner)
 
         # Determine active input mode from cookie (voice sessions only).
-        voice_on = app.state.voice_mode != "off"
+        voice_runner_available = app.state.voice_runner is not None
+        voice_on = app.state.voice_mode != "off" and voice_runner_available
         if voice_on:
             raw_cookie = request.cookies.get("interview_mode", "voice")
             active_mode = raw_cookie if raw_cookie in ("text", "voice") else "voice"
@@ -248,8 +261,9 @@ def make_app(
             "turn_kind": turn_kind,
             "turn_nonce": uuid.uuid4().hex,
             "voice_mode": voice_on,
+            "voice_runner_available": voice_runner_available,
             "voice_mode_setting": app.state.voice_mode,
-            "allow_text_switch": app.state.voice_mode == "on",
+            "allow_text_switch": app.state.voice_mode == "on" and voice_runner_available,
             "active_mode": active_mode,
             "probe_pending": probe_pending,
             "problem_progress": problem_progress,
@@ -269,6 +283,15 @@ def make_app(
         started = time.monotonic()
         _log: EventLog = app.state.log
         now = datetime.now(UTC)
+
+        record = _session_record_or_404(session_id, _log)
+        if bool(record.get("ended")):
+            return RedirectResponse(f"/sessions/{session_id}/result", status_code=303)
+
+        answer_text = answer.strip()
+        code_text = code.strip()
+        if not answer_text and not code_text:
+            raise HTTPException(status_code=400, detail="answer or code is required")
 
         # Determine turn kind from current projection.
         proj_sessions, _, _, _, _ = replay(session_id, _log)
@@ -290,7 +313,7 @@ def make_app(
         seq = (_log.last_seq(session_id) or 0) + 1
 
         # Append candidate turn (idempotent via nonce).
-        _log.append(
+        turn_env = _log.append(
             Envelope(
                 session_id=session_id,
                 seq=seq,
@@ -300,9 +323,8 @@ def make_app(
             ),
             nonce,
         )
-
-        answer_text = answer.strip()
-        code_text = code.strip()
+        stored_turn = cast(TurnPosted, turn_env.payload)
+        turn_id = stored_turn.id
 
         if answer_text:
             seq = (_log.last_seq(session_id) or 0) + 1
@@ -487,6 +509,12 @@ def make_app(
             }
             await websocket.send_json(transcript_msg)
 
+            examiner_text_msg: ServerExaminerText = {
+                "type": "examiner_text",
+                "text": result.examiner_text,
+            }
+            await websocket.send_json(examiner_text_msg)
+
             # Stream TTS audio chunks.
             first_chunk = True
             async for audio_chunk in result.audio_stream:
@@ -563,11 +591,13 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     load_dotenv(dotenv_path=_Path(__file__).parent.parent.parent / ".env", override=False)
 
     from adapters.challenger.llm_challenger import LlmChallenger
+    from adapters.examiner.llm_examiner import LlmExaminer
     from adapters.http.voice_runner import VoiceRunner
     from adapters.llm.factory import get_model_router
     from adapters.scorer.aggregator import RubricAggregator
     from adapters.scorer.authenticity_scorer import AuthenticityScorer
     from adapters.scorer.llm_communication_scorer import LlmCommunicationScorer
+    from adapters.scorer.llm_experiment_design_scorer import LlmExperimentDesignScorer
     from adapters.scorer.llm_insight_interp_scorer import LlmInsightInterpScorer
     from adapters.scorer.llm_problem_framing_scorer import LlmProblemFramingScorer
     from adapters.scorer.llm_rationale_scorer import LlmRationaleScorer
@@ -589,7 +619,7 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     tts_mode = os.getenv("TTS_MODE", "off").strip().lower() or "off"
     if tts_mode not in {"off", "on"}:
         tts_mode = "off"
-    rubric_path = _Path("templates") / "rubrics" / "ds-ml-engineer-v1.yaml"
+    rubric_path = _Path("templates") / "rubrics" / "ds-ml-engineer-chat-v1.yaml"
     output_dir = _Path(os.getenv("OUTPUT_DIR", "outputs"))
     aggregator = RubricAggregator.from_yaml(rubric_path, output_dir=output_dir)
     communication_scorer = LlmCommunicationScorer(router)
@@ -603,8 +633,10 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
 
     runner = SessionRunner(
         challenger=LlmChallenger(router, case_bank=case_bank),
+        examiner=LlmExaminer(router),
         scorers={
             Dimension.model_rationale: LlmRationaleScorer(router),
+            Dimension.experiment_design: LlmExperimentDesignScorer(router),
             Dimension.communication: communication_scorer,
             Dimension.problem_framing: LlmProblemFramingScorer(router),
             Dimension.insight_interp: LlmInsightInterpScorer(router),
@@ -614,6 +646,7 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
         scored_dimensions=(
             Dimension.problem_framing,
             Dimension.model_rationale,
+            Dimension.experiment_design,
             Dimension.insight_interp,
             Dimension.communication,
         ),
