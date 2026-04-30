@@ -10,6 +10,7 @@ from adapters.llm.task_tier_map import tier_for
 from core.contracts import Scorer
 from core.domain import Artifact, Dimension, Signal
 from core.events import ScorerFailed
+from core.prompt_safety import RED_LINE, candidate_turn_envelope
 
 
 class JsonModelRouter(Protocol):
@@ -108,8 +109,9 @@ class BaseLlmScorer(Scorer):
                 f"Session: {session_id}",
                 f"Artifact ID: {artifact.id}",
                 f"Artifact kind: {artifact.kind}",
+                RED_LINE,
                 "Artifact body:",
-                artifact.body,
+                candidate_turn_envelope(artifact.produced_by_turn_id, "candidate", artifact.body),
             ]
         )
 

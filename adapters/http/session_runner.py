@@ -36,6 +36,7 @@ from core.events import (
     CoverageSnapshot,
     Envelope,
     ExaminerFailed,
+    PacingFloorReached,
     PerProblemScoreComputed,
     ProblemClosed,
     ProblemCoverageObserved,
@@ -62,10 +63,12 @@ from core.orchestrator import (
     RequestScoring,
     next_action,
 )
+from core.pacing import Pacer
 from core.problem_bank import ProblemBank
 from core.problem_sequencer import EndSession as SeqEndSession
 from core.problem_sequencer import IntroduceNext, ProblemSequencer
 from core.projections import ArtifactStore, RuntimeStore, ScoreStore, SessionStore, SignalStore
+from core.prompt_safety import candidate_turn_envelope
 from core.session_boot import replay_with_stages
 
 _MAX_STEPS = 100
@@ -103,6 +106,7 @@ class SessionRunner:
     # Phase 2.2: per-problem probe safety cap.
     max_probes_per_problem: int = 6
     session_workspace_root: Path = Path("outputs") / "sessions"
+    pacer: Pacer = field(default_factory=Pacer)
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -597,12 +601,34 @@ class SessionRunner:
         first_token_ms = _elapsed_ms(started) if probe_text else context_assembled_ms
 
         if probe_text:
-            self._append(
-                session_id,
-                log,
-                BackchannelPosted(message="got it"),
-                idem_key=f"backchannel-before-probe:{last_candidate_turn_id}",
+            already_backchanneled = any(
+                isinstance(env.payload, BackchannelPosted)
+                for env in log.get_session(session_id)
+                if env.idem_key == f"backchannel-before-probe:{last_candidate_turn_id}"
             )
+            backchannel = self.pacer.backchannel_for(
+                last_candidate_turn_id, already_emitted=already_backchanneled
+            )
+            if backchannel:
+                self._append(
+                    session_id,
+                    log,
+                    BackchannelPosted(message=backchannel),
+                    idem_key=f"backchannel-before-probe:{last_candidate_turn_id}",
+                )
+
+            slept_ms = self.pacer.apply_floor(started_monotonic=started)
+            if slept_ms > 0:
+                self._append(
+                    session_id,
+                    log,
+                    PacingFloorReached(
+                        turn_id=f"probe-after-{last_candidate_turn_id}",
+                        floor_ms=self.pacer.response_floor_ms,
+                        slept_ms=slept_ms,
+                    ),
+                    idem_key=f"pacing-floor:{last_candidate_turn_id}",
+                )
 
         # ── Post probe turn ──
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
@@ -1034,5 +1060,7 @@ def _build_problem_transcript(
             }.get(tp.actor, tp.actor.value)
             text = turn_artifact.get(tp.id, "")
             if text:
+                if tp.actor == Actor.candidate:
+                    text = candidate_turn_envelope(tp.id, "candidate", text)
                 lines.append(f"{actor_label}: {text}")
     return "\n".join(lines)

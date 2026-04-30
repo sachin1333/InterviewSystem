@@ -1,167 +1,109 @@
 # InterviewSystem
 
-AI-powered technical interview platform for Data Science / ML Engineer candidates. The Phase 0–η voice slice is live: event-sourced backbone, FSM orchestrator, LLM Challenger + Scorers via OpenAI, sandboxed Python runtime, chat-style HTTP UI, and an opt-in voice interview path.
+AI-powered technical interview platform for Data Science / ML Engineer candidates. The current chat workflow is event-sourced end-to-end: candidate intake, personalized Challenger/Examiner prompts, continuous chat, optional code execution, LLM scoring, recruiter evidence, lightweight metrics, and deterministic offline tests. Voice remains feature-flagged and is not the current production focus.
 
 ## Quick start
 
 ```bash
-# 1. Install
 uv sync
-
-# 2. Configure LLM. See .env.example.
 cp .env.example .env
-$EDITOR .env   # set OPENAI_API_KEY=sk-...
-
-# 3. Run
+$EDITOR .env   # set OPENAI_API_KEY=sk-... or FAKE_LLM=1 for offline demos
 uv run uvicorn adapters.http.app:create_app --factory --reload --port 8000
-
-# 4. Open http://localhost:8000 and start an interview.
 ```
 
-The candidate flow:
-1. Land on `/`, enter a handle, click **Start interview**.
-2. The Challenger LLM proposes a real-world DS/ML scenario (or a canned prompt if the model misses its 8s deadline).
-3. Chat back and forth — interviewer bubbles on the left, your replies on the right. `Enter` sends, `Shift+Enter` newlines, `+ add code` reveals an optional Python cell that runs in a sandboxed subprocess.
-4. When the answer budget is hit, the configured chat scorers run, the rubric aggregator writes `outputs/{session_id}_feedback.md`, and you're redirected to the result page.
+Open <http://localhost:8000>.
 
-Chat sessions use `templates/rubrics/ds-ml-engineer-chat-v1.yaml`, which scores five chat-observable dimensions. Voice-only `response_authenticity` remains part of the voice workflow and is not included in chat composites.
+## Candidate chat flow
 
-Candidate turn submission is idempotent by `turn_nonce`; retries after partial writes reuse the originally stored turn ID so artifacts cannot become orphaned. System-generated interviewer turns use deterministic idempotency keys so refreshes/concurrent GETs do not duplicate prompts.
+1. Candidate enters a handle and optional personalization context.
+2. Candidate may paste resume/profile text or upload a `.txt`, `.pdf`, or `.docx` resume. `.txt` works without extra dependencies; PDF/DOCX parsing is best-effort via optional parser packages when installed.
+3. Intake strips common PII, writes `outputs/sessions/<session_id>/USER.md`, and emits `ProfileIngested`.
+4. Challenger asks a personalized DS/ML problem.
+5. Candidate chats in a continuous thread. `Enter` sends, `Shift+Enter` adds a newline, and `+ add code` reveals an optional Python cell.
+6. Examiner probes with backchannels, pacing floor, graceful fallback, and profile-aware follow-ups.
+7. Scorers run off the candidate-facing path; the result page shows composite feedback.
 
-Tests: `uv run pytest` (127 unit tests, no network).
+Realtime chat budget is tested with deterministic latency smoke tests. The app-side chat orchestration stays within the 1–3s target under simulated slow model calls; real provider/network latency can still vary.
+
+## Recruiter workflow
+
+- `/recruiter/sessions` lists sessions.
+- `/recruiter/sessions/{session_id}` shows composite score, per-dimension score evidence, signal justifications, source refs, transcript anchors, and human override controls.
+- Human overrides append audit events and reviewer signals; they do not replace original scorer signals.
+
+## Internal operations
+
+- `/internal/metrics` exposes lightweight Prometheus-style in-process counters/histograms for chat/recruiter request latency.
+- LLM audit helpers record prompt/response hashes and metadata only, never raw prompt text.
+- Candidate-authored prompt context is wrapped as untrusted data before entering scorer/examiner prompts.
 
 ## Voice mode
 
-`create_app()` now supports a feature-flagged voice path.
+Voice is still available behind feature flags, but chat is the current tested scope.
 
-- `VOICE_MODE=off` (default): existing text-only experience.
-- `VOICE_MODE=on`: voice UI is shown; the candidate can manually switch to typing.
-- `VOICE_MODE=forced`: voice UI is shown and manual switching is hidden; the text panel still opens automatically for text-heavy stages.
-- `TTS_MODE=off` (default): voice sessions accept speech input and render interviewer text without audio playback.
-- `TTS_MODE=on`: streams examiner audio using Cartesia/ElevenLabs when keys are configured, or fake TTS in offline tests.
-
-```bash
-VOICE_MODE=off uv run uvicorn adapters.http.app:create_app --factory
-VOICE_MODE=on uv run uvicorn adapters.http.app:create_app --factory
-VOICE_MODE=on TTS_MODE=on uv run uvicorn adapters.http.app:create_app --factory
-```
-
-### Voice env vars
-
-| Variable | Required? | Default | Purpose |
-|---|---|---|---|
-| `VOICE_MODE` | no | `off` | Voice UI visibility / policy |
-| `WISPR_API_KEY` | when `VOICE_MODE!=off` and using real STT | — | Wispr Flow streaming STT |
-| `CARTESIA_API_KEY` | optional | — | Primary Cartesia Sonic TTS |
-| `ELEVENLABS_API_KEY` | optional | — | ElevenLabs Flash fallback TTS |
-| `VOICE_LATENCY_BUDGET_MS` | no | `800` | Soft SLA for voice-turn latency monitoring |
-| `TTS_MODE` | no | `off` | Text-to-speech playback gate (`on` enables audio chunks) |
-
-If the STT provider key is missing, the app falls back to deterministic fake STT. TTS is disabled unless `TTS_MODE=on`; when enabled without provider keys, deterministic fake TTS keeps the browser flow and tests offline.
+| Variable | Default | Purpose |
+|---|---:|---|
+| `VOICE_MODE` | `off` | `off`, `on`, or `forced` voice UI policy |
+| `TTS_MODE` | `off` | Enables audio playback when `on` |
+| `VOICE_LATENCY_BUDGET_MS` | `800` | Voice soft latency budget |
+| `WISPR_API_KEY` | — | Optional real STT provider |
+| `CARTESIA_API_KEY` | — | Optional primary TTS provider |
+| `ELEVENLABS_API_KEY` | — | Optional TTS fallback |
 
 ## Architecture in one paragraph
 
-A FastAPI surface ([adapters/http/app.py](adapters/http/app.py)) sits over a stateless `SessionRunner` that replays an append-only SQLite event log on every request and asks a pure FSM ([core/orchestrator.py](core/orchestrator.py)) what to do next: ask the Challenger for a question, run candidate code, request the Examiner for a probe, ask a Scorer for a signal, or aggregate the rubric. All production LLM I/O uses one OpenAI model (`OPENAI_MODEL`, default `gpt-5.5`) with fast reasoning (`OPENAI_REASONING_EFFORT=low`) loaded from `.env`; the wrapper still provides retries, deadlines, deterministic test fakes, and JSON extraction tolerant of markdown fences.
+A FastAPI surface ([`adapters/http/app.py`](adapters/http/app.py)) sits over a stateless `SessionRunner` that replays an append-only SQLite event log and asks the pure FSM ([`core/orchestrator.py`](core/orchestrator.py)) what to do next: ask the Challenger, request candidate input, execute code, probe with the Examiner, score artifacts, or aggregate. LLM-backed adapters load markdown personas from `templates/agents/`. Production LLM I/O uses one OpenAI model (`OPENAI_MODEL`, default `gpt-5.5`) with fast reasoning (`OPENAI_REASONING_EFFORT=low`); tests use deterministic fakes.
 
-## How to read this folder
+## Important paths
 
-Start here, in order:
-
-1. **[architecture-and-plan.md](./architecture-and-plan.md)** — the whole design. 13 sections covering first principles, domain model, backbone, MVP cut, phased roadmap, ADRs, agent-persona-as-data pattern, speed & humanly-interaction constraints, and candidate profile ingestion.
-2. **[CHANGELOG.md](./CHANGELOG.md)** — what was decided when.
-3. **[CLAUDE.md](./CLAUDE.md)** — project-level operating rules for contributors (AI or human).
-4. **`templates/`** — the runtime agent-persona layer. Markdown files loaded by adapters to compose LLM prompts. See map below.
-
-## How to read this folder
-
-Start here, in order:
-
-1. **[architecture-and-plan.md](./architecture-and-plan.md)** — the whole design. 13 sections covering first principles, domain model, backbone, MVP cut, phased roadmap, ADRs, agent-persona-as-data pattern, speed & humanly-interaction constraints, and candidate profile ingestion.
-2. **[CHANGELOG.md](./CHANGELOG.md)** — what was decided when.
-3. **[CLAUDE.md](./CLAUDE.md)** — project-level operating rules for contributors (AI or human).
-4. **`templates/`** — the runtime agent-persona layer. Markdown files loaded by adapters to compose LLM prompts. See map below.
-
-## Template map
-
-```
-templates/
-├── agents/
-│   ├── AGENTS.md                     # shared red lines for every agent
-│   ├── challenger/                   # authors the case study
-│   │   ├── IDENTITY.md
-│   │   ├── SOUL.md
-│   │   └── TOOLS.md
-│   ├── examiner/                     # skeptical stakeholder, conversational
-│   │   ├── IDENTITY.md
-│   │   ├── SOUL.md
-│   │   ├── PACING.md                 # human-texture rules (latency, backchannels, repair)
-│   │   └── TOOLS.md
-│   ├── intake/                       # profile ingestion (resume + LinkedIn + blog + GitHub)
-│   │   ├── IDENTITY.md
-│   │   └── TOOLS.md
-│   └── scorers/
-│       ├── rationale/                # scores model_rationale dimension
-│       │   ├── IDENTITY.md
-│       │   ├── SOUL.md
-│       │   └── TOOLS.md
-│       └── communication/            # scores communication dimension
-│           ├── IDENTITY.md
-│           ├── SOUL.md
-│           └── TOOLS.md
-├── rubrics/
-│   └── ds-ml-engineer-v1.yaml        # MVP rubric, 4 dimensions, weights hidden from agents
-└── session/
-    ├── BOOT.md.tmpl                  # per-session snapshot (rubric, role, runtime config)
-    ├── BOOTSTRAP.md                  # one-time: author a new interview template
-    ├── CONSENT.md                    # candidate-facing consent surface
-    ├── HEARTBEAT.md                  # orchestrator tick rules (pacing, async scorers)
-    ├── MEMORY.md.tmpl                # curated session notes
-    └── USER.md.tmpl                  # candidate profile + rolling observations
+```text
+adapters/http/                 FastAPI routes, chat UI, recruiter UI
+adapters/challenger/           LLM Challenger adapter
+adapters/examiner/             LLM Examiner adapter
+adapters/scorer/               LLM scorers and aggregator
+adapters/runtime/              Best-effort subprocess runtime
+core/                          Domain, events, projections, orchestrator, intake, safety
+config/                        Model/tier compatibility config
+templates/agents/              Persona markdown for Challenger, Examiner, Scorers
+templates/rubrics/             Rubric YAML
+templates/session/             BOOT/CONSENT/USER/MEMORY templates
+tests/                         Unit, integration, chaos, adversarial tests
 ```
 
-## Core ideas in one page
+## Core ideas
 
-- **Domain primitive** — `Session → Turn → Artifact → Signal → Score`. Six objects, nothing more.
-- **Event log is truth.** State is a projection. Replayable.
-- **Hexagonal core.** Five contracts (`Challenger`, `Examiner`, `Scorer`, `Runtime`, `UIAdapter`) + two support contracts (`ModelRouter`, `ProfileSource`, `PersonaLoader`). Everything else is an adapter.
-- **Agent persona as data.** Personas are markdown (`IDENTITY.md` + `SOUL.md` + `TOOLS.md`), not hardcoded prompts.
-- **Speed is a constraint, not a polish.** Latency budgets are test assertions from day one. Token streaming + prompt caching + a single fast OpenAI model + scorers-off-critical-path.
-- **Humanly is designed, not emergent.** Named examiner, typing indicator, backchannels, pacing floor, graceful repair, stress dampening, warm open/close, break offer.
-- **Profile ingestion is privacy-first.** Per-source consent, PII strip before any agent reads anything, demographic signals dropped, 30-day retention default.
+- **Event log is truth.** Every stateful change is replayable.
+- **Small domain model.** `Session → Turn → Artifact → Signal → Score`.
+- **Ports and adapters.** LLMs, runtime, DB, HTTP, and UI sit outside core.
+- **Persona as data.** Agent behavior lives in markdown templates.
+- **Profile-aware, privacy-first.** Agents read scrubbed `USER.md`, not raw resumes.
+- **Candidate text is untrusted.** Prompt envelopes mark candidate-authored content as data, not instructions.
+- **Scorers stay off the hot path.** Candidate-facing latency is protected.
 
-## Roadmap at a glance
+## Roadmap status
 
-| Phase | Ship | Status |
-|---|---|---|
-| 0 | Backbone skeleton (domain, event log, projections, orchestrator, contracts) | ✅ shipped |
-| 1 | Thin slice end-to-end over HTTP with dummy adapters | ✅ shipped |
-| 1.5 | `CandidateIntake` text/resume-paste MVP; USER.md populated; consent fields | ✅ shipped (file upload pending) |
-| 2 | LLM Challenger, calibrated from USER.md | ✅ shipped |
-| 3 | LLM Examiner + humanly texture (streaming, pacing, backchannels, named persona) | partial; backchannels + USER.md context shipped |
-| 4 | Subprocess Runtime adapter (resource-limited) | ✅ shipped |
-| 5 | Rationale + Communication Scorers; rubric aggregator | ✅ shipped |
-| 6 | Candidate chat UI + Recruiter dashboard | ✅ chat UI; server-rendered evidence MVP shipped |
-| next | Recruiter workflows + stronger candidate intake | up next |
-| post-MVP | Proctor, ATS sync, bias audit, messy-data generator, LinkedIn/blog/GitHub profile sources | — |
+| Architecture phase | Status |
+|---|---|
+| Phase 0 — Backbone skeleton | ✅ shipped |
+| Phase 1 — End-to-end thin slice | ✅ shipped |
+| Phase 2 — Candidate Profile Ingestion | ✅ text + upload MVP shipped; LinkedIn/blog/GitHub deferred |
+| Phase 3 — Real Challenger | ✅ shipped with `USER.md` calibration |
+| Phase 4 — Real Examiner | ✅ chat MVP hardened: backchannels, pacing floor, break offer, prompt envelope, fallback |
+| Phase 5 — Notebook Runtime | ⚠️ developer-grade subprocess runtime; full Jupyter/gVisor/Firecracker sandbox deferred |
+| Phase 6 — Scorers + Aggregator + Evidence | ✅ shipped with justifications, partial states, reviewer overrides |
+| Phase 7 — Candidate UI + Recruiter Evidence | ✅ server-rendered chat/recruiter MVP; full React shell deferred |
+| Production gates | ✅ lightweight metrics/audit/adversarial checks; full OpenTelemetry/Prometheus/security program deferred |
 
-## Non-goals (MVP)
+## Runtime sandbox note
 
-- Multiple specializations beyond DS/ML Engineer.
-- Real-time proctoring AI.
-- ATS / HRIS integration.
-- Scale beyond ~50 concurrent sessions.
+The current runtime is [`adapters/runtime/subprocess_runtime.py`](adapters/runtime/subprocess_runtime.py). It applies best-effort POSIX resource limits and proxy-based network fail-fast behavior. It is **not** a production security boundary. For production isolation, use a dedicated sandbox service, containers/seccomp, gVisor, or Firecracker.
 
-## Next up
+## Testing
 
-- File-upload `ResumeSource` on top of the shipped text/paste `CandidateIntake` MVP.
-- Recruiter workflow hardening beyond the shipped server-rendered evidence MVP.
-- Production-hardening the voice adapters (real latency telemetry, stronger resume-deep-dive prompts, richer fallback UX).
+```bash
+uv run ruff check core adapters tests
+uv run mypy core adapters tests/unit/test_pacing.py tests/unit/test_observability.py tests/unit/test_prompt_safety.py tests/unit/test_resume_source.py tests/unit/test_llm_audit_hashes.py
+uv run pytest -q
+```
 
-**Runtime Sandbox**
-
-- **Adapter:** [adapters/runtime/subprocess_runtime.py](adapters/runtime/subprocess_runtime.py) — executes candidate Python in a short-lived subprocess and applies POSIX resource limits when available.
-- **Bootstrap adapter:** [adapters/runtime/runtime_adapter.py](adapters/runtime/runtime_adapter.py) — wraps the runtime and emits `RuntimeExecuted` / `RuntimeFailed` and `ArtifactAttached` events to the event log.
-- **Defaults:** memory cap ~512MB, CPU time cap ~10s (configurable in adapter constructor).
-- **Network:** the runtime sets `HTTP_PROXY` / `HTTPS_PROXY` to an unreachable host by default to make outbound network calls fail-fast. This is NOT a security sandbox — it reduces accidental network access but does not prevent all exfiltration.
-- **Platform notes:** POSIX `resource` limits and `preexec_fn` are applied only when available (Unix-like systems). On macOS and Linux these help mitigate runaway code; Windows behavior will be more permissive.
-- **Safety note:** This sandbox is best-effort. For production isolation use OS-level sandboxing (containers, seccomp, process namespaces) or a dedicated execution service. Treat `SubprocessRuntime` as a developer-grade mitigation, not a security boundary.
+The full pytest suite runs offline with fake LLM/STT/TTS providers.

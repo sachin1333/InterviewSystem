@@ -200,6 +200,12 @@ class BreakDue(_Evt):
     reason: str
 
 
+class PacingFloorReached(_Evt):
+    turn_id: str
+    floor_ms: int = Field(ge=0)
+    slept_ms: int = Field(ge=0)
+
+
 # --- intake / human override ---------------------------------------------
 
 class ProfileIngested(_Evt):
@@ -319,7 +325,7 @@ EVENT_TYPES: set[type] = {
     # voice
     SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved, TurnTimingObserved,
     # pacing
-    CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
+    CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue, PacingFloorReached,
     # intake / override
     ProfileIngested, HumanOverride,
     # case stages (legacy - kept for replay of Phase alpha-theta sessions)

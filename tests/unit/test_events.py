@@ -20,6 +20,7 @@ from core.events import (
     HumanOverride,
     IdleThresholdCrossed,
     LatencyObserved,
+    PacingFloorReached,
     PerProblemScoreComputed,
     ProblemClosed,
     ProblemCoverageObserved,
@@ -138,7 +139,7 @@ def test_event_types_registry_covers_all_payloads():
         # voice
         SpeechStarted, SpeechFinalized, AudioChunkAttached, LatencyObserved, TurnTimingObserved,
         # pacing
-        CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue,
+        CandidateIdle, IdleThresholdCrossed, BackchannelPosted, BreakDue, PacingFloorReached,
         # intake / override
         ProfileIngested, HumanOverride,
         # case stages (legacy — replay only)

@@ -134,3 +134,26 @@
 - Root cause found and fixed: `LlmExaminer.review()` retried around `ModelRouter.call_json()`, while `call_json()` already performs bounded JSON retry. Malformed examiner JSON therefore caused four provider calls and crossed 3s. Removed duplicate adapter-level retry.
 - Quality gates: `rtk uv run ruff check core adapters tests` -> pass; `rtk uv run mypy core adapters tests/unit/test_candidate_intake.py tests/unit/test_personalized_prompts.py tests/unit/test_scorer_evidence.py tests/unit/test_human_override.py` -> pass; `rtk uv run pytest -q` -> full suite pass; `rtk git diff --check` -> pass.
 - Caveat: latency test uses deterministic `FakeRouter` with simulated model delay. Real OpenAI latency can still vary by network/provider load; this verifies app-side chat orchestration stays inside the 1–3s target when the model dependency is moderately slow.
+
+---
+
+# Current Task — Implement Requested Items 1, 3, 4, 5
+
+## Requested scope
+- [x] 1. Phase 4 Examiner completeness.
+- [x] 3. Phase 7 UI/recruiter polish.
+- [x] 4. Stronger candidate intake with resume upload/parser.
+- [x] 5. Production hardening / observability / security gates.
+
+## Plan
+- [x] Inspect current roadmap/status and map requested item numbers to concrete gaps.
+- [x] Write implementation plan: `docs/superpowers/plans/2026-04-30-phase4-7-hardening-intake-observability.md`.
+- [x] Scope approved; implemented and verified.
+
+## Review
+- Added pacing helpers/events, examiner pacing floor, break offer UI, and no-repeat backchannel guard.
+- Added prompt-safety envelope helpers and adversarial scorer prompt test.
+- Added resume upload source with `.txt` support and optional PDF/DOCX parsing hooks; raw upload is stored under session profile artifacts and scrubbed `USER.md` feeds agents.
+- Added recruiter session list and evidence source anchor links.
+- Added lightweight `/internal/metrics` and hash-only LLM audit helper.
+- Rewrote README to reflect current chat-first capabilities and deferred voice/full-sandbox scope.

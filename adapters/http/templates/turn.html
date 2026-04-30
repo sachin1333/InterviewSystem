@@ -82,6 +82,7 @@
         <p class="eyebrow">Interview workspace</p>
         <h1>Continuous chat <span class="meta">{{ turn_kind }} · {{ session_id }}</span></h1>
         {% if problem_progress %}<div class="problem-pill" aria-live="polite">{{ problem_progress }}</div>{% endif %}
+        {% if break_due %}<div class="problem-pill break-offer" aria-live="polite">You can take a 5-minute break after this response.</div>{% endif %}
       </div>
       {% if voice_mode and allow_text_switch %}
       <div class="mode-toggle" role="group" aria-label="Input mode">

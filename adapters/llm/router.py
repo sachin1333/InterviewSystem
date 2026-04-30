@@ -7,6 +7,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from core.observability import AuditLogger
+
 type Tier = Literal["cheap", "mid", "top"]
 type RouterResponse = str | Iterable[str]
 
@@ -51,6 +53,7 @@ class ModelRouter:
         top_timeout: float = 15.0,
         max_retries: int = 3,
         sleep: Callable[[float], None] = time.sleep,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
         self.provider = provider
         self.cheap_timeout = cheap_timeout
@@ -58,6 +61,7 @@ class ModelRouter:
         self.top_timeout = top_timeout
         self.max_retries = max_retries
         self.sleep = sleep
+        self.audit_logger = audit_logger
 
     def call(
         self,
@@ -81,12 +85,20 @@ class ModelRouter:
                 min(remaining, tier_timeout) if remaining is not None else tier_timeout
             )
             try:
-                return self.provider.call(
+                response = self.provider.call(
                     tier=tier,
                     prompt=prompt,
                     stream=stream,
                     timeout=effective_timeout,
                 )
+                if self.audit_logger is not None and isinstance(response, str):
+                    self.audit_logger.record_llm_call(
+                        agent_name=f"router:{tier}",
+                        model_id="provider",
+                        prompt=prompt,
+                        response=response,
+                    )
+                return response
             except TimeoutError as exc:
                 last_exc = exc
                 if deadline is None or (deadline - time.monotonic()) > 0:

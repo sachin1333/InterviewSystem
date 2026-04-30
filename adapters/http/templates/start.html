@@ -17,7 +17,7 @@
   <h1>DS / ML Engineer Interview</h1>
   <p>You will be given a data science or ML problem.
      Explain your reasoning clearly — that matters more than perfect code.</p>
-  <form method="post" action="/sessions">
+  <form method="post" action="/sessions" enctype="multipart/form-data">
     <label for="handle">Your name or handle</label>
     <input id="handle" name="candidate_handle" type="text" required autofocus placeholder="e.g. alice">
     <p class="note">This is used only to label your session. No account required.</p>
@@ -34,6 +34,9 @@
 
       <label for="declared_skills">Declared skills</label>
       <input id="declared_skills" name="declared_skills" type="text" placeholder="Python, PyTorch, SQL">
+
+      <label for="resume_file">Resume upload (.txt, .pdf, .docx)</label>
+      <input id="resume_file" name="resume_file" type="file" accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
 
       <label for="resume_text">Resume/profile notes</label>
       <textarea id="resume_text" name="resume_text" rows="8" placeholder="Paste resume text or relevant project details"></textarea>

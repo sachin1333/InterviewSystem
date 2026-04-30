@@ -30,7 +30,7 @@
           <p><strong>{{ signal.emitted_by }}</strong> · {{ '%.2f'|format(signal.value) }} confidence {{ '%.2f'|format(signal.confidence) }}</p>
           <p>{{ signal.justification }}</p>
           <p>Sources:
-          {% for ref in signal.source_refs %}<code>{{ ref }}</code> {% endfor %}
+          {% for ref in signal.source_refs %}<a href="#turn-{{ ref }}"><code>{{ ref }}</code></a> {% endfor %}
           </p>
         </article>
       {% endfor %}
@@ -57,5 +57,5 @@
       <button type="submit">Append override</button>
     </form>
   </section>
-</body>
+<section class="card"><h2>Transcript anchors</h2>{% for dim in dimensions %}{% for signal in dim.signals %}{% for ref in signal.source_refs %}<div id="turn-{{ ref }}">Source {{ ref }}</div>{% endfor %}{% endfor %}{% endfor %}</section></body>
 </html>

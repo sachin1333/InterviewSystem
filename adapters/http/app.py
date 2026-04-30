@@ -19,8 +19,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, cast
 
-from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -40,6 +49,7 @@ from core.domain import Actor, ArtifactKind, Dimension, Signal, TurnKind
 from core.events import (
     ArtifactAttached,
     BackchannelPosted,
+    BreakDue,
     CandidateJoined,
     Envelope,
     HumanOverride,
@@ -51,8 +61,10 @@ from core.events import (
     TurnPosted,
     TurnTimingObserved,
 )
+from core.observability import GLOBAL_METRICS, MetricSink
 from core.pack_loader import PackRegistry
 from core.primitives import Primitive
+from core.profile_sources import ProfileSourceError, ResumeSource
 from core.session_boot import replay
 
 if TYPE_CHECKING:
@@ -194,6 +206,25 @@ def _score_evidence(session_id: str, log: EventLog) -> dict[str, object]:
         "overrides": overrides,
     }
 
+
+def _break_due(session_id: str, log: EventLog, runner: SessionRunner) -> bool:
+    sessions, _, _, _, _ = replay(session_id, log)
+    record = sessions.get(session_id)
+    if record is None:
+        return False
+    answer_count = sum(1 for turn in record["turns"] if turn["actor"] == Actor.candidate)
+    offered = any(isinstance(env.payload, BreakDue) for env in log.get_session(session_id))
+    return runner.pacer.should_offer_break(answer_count=answer_count, break_already_offered=offered)
+
+
+def _session_summaries(log: EventLog) -> list[dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    for env in log.all():
+        bucket = out.setdefault(env.session_id, {"session_id": env.session_id, "started_at": env.at, "score": None})
+        if isinstance(env.payload, ScoreComputed):
+            bucket["score"] = env.payload.score
+    return sorted(out.values(), key=lambda item: str(item["started_at"]), reverse=True)
+
 def _session_record_or_404(session_id: str, log: EventLog) -> dict[str, object]:
     """Return a started session projection or reject invalid candidate writes."""
     sessions, _, _, _, _ = replay(session_id, log)
@@ -239,6 +270,17 @@ def make_app(
     app.state.voice_runner = voice_runner
     app.state.voice_mode = voice_mode
     app.state.voice_latency_budget_ms = voice_latency_budget_ms
+    app.state.metrics = GLOBAL_METRICS
+
+    @app.middleware("http")
+    async def record_chat_metrics(request: Request, call_next):  # type: ignore[no-untyped-def]
+        started = time.monotonic()
+        response = await call_next(request)
+        elapsed_ms = (time.monotonic() - started) * 1000
+        if request.url.path.startswith(("/sessions", "/recruiter")):
+            app.state.metrics.increment("chat_requests_total", labels={"route": request.url.path})
+            app.state.metrics.observe("chat_request_ms", elapsed_ms, labels={"route": request.url.path})
+        return response
 
     # ------------------------------------------------------------------ #
     #  Start page                                                          #
@@ -261,6 +303,7 @@ def make_app(
         declared_skills: Annotated[str, Form()] = "",
         resume_text: Annotated[str, Form()] = "",
         other_details: Annotated[str, Form()] = "",
+        resume_file: Annotated[UploadFile | None, File()] = None,
     ) -> RedirectResponse:
         session_id = f"s-{uuid.uuid4().hex[:12]}"
         _log: EventLog = app.state.log
@@ -285,16 +328,29 @@ def make_app(
             payload=CandidateJoined(candidate_handle=handle),
         ))
 
+        session_dir = app.state.output_dir / "sessions" / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        uploaded_resume_text = ""
+        if resume_file is not None and resume_file.filename:
+            data = await resume_file.read()
+            try:
+                fragment = ResumeSource().fetch_bytes(resume_file.filename, data)
+            except ProfileSourceError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            artifact_dir = session_dir / "artifacts" / "profile"
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = Path(fragment.filename).name
+            (artifact_dir / safe_name).write_bytes(data)
+            uploaded_resume_text = fragment.text
+
         profile = build_profile(
             candidate_handle=handle,
             declared_role=candidate_role,
             years_experience=years_experience,
             declared_skills_text=declared_skills,
-            resume_text=resume_text,
+            resume_text="\n".join(part for part in (resume_text, uploaded_resume_text) if part),
             other_details=other_details,
         )
-        session_dir = app.state.output_dir / "sessions" / session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
         user_md_path = session_dir / "USER.md"
         user_md_path.write_text(render_user_md(profile), encoding="utf8")
         _log.append(Envelope(
@@ -333,6 +389,9 @@ def make_app(
             or (result.turn_kind == TurnKind.defense and not _last_interviewer_has_text(messages))
         )
         problem_progress = _problem_progress(session_id, _log, _runner)
+        if _break_due(session_id, _log, _runner):
+            _append_event(_log, session_id, BreakDue(reason="scheduled_break_offer"))
+        break_due = any(isinstance(env.payload, BreakDue) for env in _log.get_session(session_id))
 
         # Determine active input mode from cookie (voice sessions only).
         voice_runner_available = app.state.voice_runner is not None
@@ -355,6 +414,7 @@ def make_app(
             "active_mode": active_mode,
             "probe_pending": probe_pending,
             "problem_progress": problem_progress,
+            "break_due": break_due,
         })
 
     # ------------------------------------------------------------------ #
@@ -504,6 +564,19 @@ def make_app(
     # ------------------------------------------------------------------ #
     #  Recruiter evidence view                                            #
     # ------------------------------------------------------------------ #
+
+
+    @app.get("/recruiter/sessions", response_class=HTMLResponse)
+    async def recruiter_sessions(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "recruiter_sessions.html", {
+            "request": request,
+            "sessions": _session_summaries(app.state.log),
+        })
+
+    @app.get("/internal/metrics", response_class=PlainTextResponse)
+    async def internal_metrics() -> PlainTextResponse:
+        metrics: MetricSink = app.state.metrics
+        return PlainTextResponse(metrics.export_prometheus())
 
     @app.get("/recruiter/sessions/{session_id}", response_class=HTMLResponse)
     async def recruiter_session(request: Request, session_id: str) -> HTMLResponse:

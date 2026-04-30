@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Recruiter sessions</title></head>
+<body>
+  <h1>Recruiter sessions</h1>
+  <ul>
+  {% for s in sessions %}
+    <li><a href="/recruiter/sessions/{{ s.session_id }}">{{ s.session_id }}</a>{% if s.score %} — Composite score {{ '%.2f'|format(s.score.composite) }}{% else %} — partial{% endif %}</li>
+  {% endfor %}
+  </ul>
+</body></html>
