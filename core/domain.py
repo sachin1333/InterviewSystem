@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import NewType
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Opaque ID type for problems - str at runtime, distinct in type-checkers.
 ProblemId = NewType("ProblemId", str)
@@ -72,12 +72,20 @@ class Artifact(_Frozen):
 
 
 class Signal(_Frozen):
+    id: str = ""
     dimension: Dimension
     value: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     source_refs: tuple[str, ...]
     emitted_by: str
+    justification: str = "evidence recorded"
     at: datetime
+
+    @model_validator(mode="after")
+    def _scorer_justification_non_empty(self) -> Signal:
+        if "scorer" in self.emitted_by and not self.justification.strip():
+            raise ValueError("scorer signals require non-empty justification")
+        return self
 
 
 class Rubric(_Frozen):

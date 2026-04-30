@@ -120,13 +120,14 @@ class LlmExaminer(Examiner):
         *,
         memory_text: str = "",
         coverage: CoverageContext | None = None,
+        user_context: str = "",
     ) -> tuple[ExaminerOutcome, ExaminerFailed | None]:
         """Call the LLM and parse a probe-or-close decision.
 
         Retries once on malformed JSON before returning a failure outcome.
         """
         prompt = self._compose_prompt(
-            session_id, recent_turns, memory_text, coverage=coverage
+            session_id, recent_turns, memory_text, coverage=coverage, user_context=user_context
         )
         # Only "action" is strictly required; other fields are action-dependent.
         # "rationale" is also expected but tolerated as empty string on miss.
@@ -159,6 +160,7 @@ class LlmExaminer(Examiner):
         recent_turns: Sequence[Any],
         *,
         coverage: CoverageContext | None = None,
+        user_context: str = "",
     ) -> Iterator[str]:
         """Stream probe text token-by-token (SSE path).
 
@@ -171,6 +173,7 @@ class LlmExaminer(Examiner):
             [],           # TurnInfo dicts from projections != Turn domain objects
             memory_text="",
             coverage=coverage,
+            user_context=user_context,
         )
         yield from self.model_router.iter_streaming(tier="mid", prompt=prompt)
 
@@ -185,6 +188,7 @@ class LlmExaminer(Examiner):
         memory_text: str,
         *,
         coverage: CoverageContext | None = None,
+        user_context: str = "",
     ) -> str:
         parts = [
             self._load_template("IDENTITY.md"),
@@ -194,6 +198,8 @@ class LlmExaminer(Examiner):
             f"Session: {session_id}",
             f"Memory: {memory_text or '(empty)'}",
         ]
+        if user_context.strip():
+            parts.append("## Candidate profile\n\n" + user_context.strip())
 
         # ── Coverage state injection (Phase 2.2) ──
         if coverage is not None:

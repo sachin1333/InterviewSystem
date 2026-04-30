@@ -204,6 +204,11 @@ class BreakDue(_Evt):
 
 class ProfileIngested(_Evt):
     profile_id: str
+    declared_role: str = "DS / ML Engineer"
+    years_experience: int | None = None
+    declared_skills: tuple[str, ...] = ()
+    claims: tuple[str, ...] = ()
+    user_md_path: str | None = None
 
 
 class HumanOverride(_Evt):
@@ -212,6 +217,15 @@ class HumanOverride(_Evt):
     override_value: float
     reviewer_id: str
     reason: str
+    source_refs: tuple[str, ...] = ()
+    emitted_signal_id: str = ""
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_non_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("override reason is required")
+        return value
 
 
 class StageEntered(_Evt):

@@ -98,7 +98,8 @@ def test_session_resumed_requires_from_seq():
 def test_human_override_carries_target_and_reason():
     h = HumanOverride(target_signal_dimension=Dimension.model_rationale,
                       original_value=0.4, override_value=0.7,
-                      reviewer_id="rec-42", reason="model choice was justified")
+                      reviewer_id="rec-42", reason="model choice was justified",
+                      source_refs=("turn-1",), emitted_signal_id="sig-reviewer")
     assert h.reviewer_id == "rec-42"
 
 

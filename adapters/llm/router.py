@@ -36,7 +36,11 @@ class RouterProvider(Protocol):
 
 
 class ModelRouter:
-    """Retrying router wrapper with timeout fallback helpers."""
+    """Retry/deadline wrapper for LLM providers.
+
+    ``tier`` is now a legacy timeout label.  Production OpenAI calls use a
+    single model regardless of tier.
+    """
 
     def __init__(
         self,
@@ -200,7 +204,11 @@ class ModelRouter:
         stream: bool,
         deadline: float | None = None,
     ) -> RouterResponse | None:
-        """Fallback chain: top -> mid -> cheap -> placeholder."""
+        """Timeout fallback chain: top -> mid -> cheap -> placeholder.
+
+        Single-model providers ignore the tier for model selection; this only
+        changes the timeout label passed through the compatibility interface.
+        """
         fallback_tier: Tier | None = None
         if tier == "top":
             fallback_tier = "mid"

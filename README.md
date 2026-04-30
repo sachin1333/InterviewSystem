@@ -1,6 +1,6 @@
 # InterviewSystem
 
-AI-powered technical interview platform for Data Science / ML Engineer candidates. The Phase 0–η voice slice is live: event-sourced backbone, FSM orchestrator, LLM Challenger + Scorers via OpenRouter, sandboxed Python runtime, chat-style HTTP UI, and an opt-in voice interview path.
+AI-powered technical interview platform for Data Science / ML Engineer candidates. The Phase 0–η voice slice is live: event-sourced backbone, FSM orchestrator, LLM Challenger + Scorers via OpenAI, sandboxed Python runtime, chat-style HTTP UI, and an opt-in voice interview path.
 
 ## Quick start
 
@@ -8,9 +8,9 @@ AI-powered technical interview platform for Data Science / ML Engineer candidate
 # 1. Install
 uv sync
 
-# 2. Configure LLM (OpenRouter or OpenAI). See .env.example.
+# 2. Configure LLM. See .env.example.
 cp .env.example .env
-$EDITOR .env   # set OPENROUTER_API_KEY=sk-or-v1-...
+$EDITOR .env   # set OPENAI_API_KEY=sk-...
 
 # 3. Run
 uv run uvicorn adapters.http.app:create_app --factory --reload --port 8000
@@ -61,7 +61,7 @@ If the STT provider key is missing, the app falls back to deterministic fake STT
 
 ## Architecture in one paragraph
 
-A FastAPI surface ([adapters/http/app.py](adapters/http/app.py)) sits over a stateless `SessionRunner` that replays an append-only SQLite event log on every request and asks a pure FSM ([core/orchestrator.py](core/orchestrator.py)) what to do next: ask the Challenger for a question, run candidate code, request the Examiner for a probe, ask a Scorer for a signal, or aggregate the rubric. All LLM I/O goes through a 3-tier `ModelRouter` with a hard wall-clock deadline, automatic fallback chain (top → mid → cheap → canned), and JSON extraction tolerant of markdown fences.
+A FastAPI surface ([adapters/http/app.py](adapters/http/app.py)) sits over a stateless `SessionRunner` that replays an append-only SQLite event log on every request and asks a pure FSM ([core/orchestrator.py](core/orchestrator.py)) what to do next: ask the Challenger for a question, run candidate code, request the Examiner for a probe, ask a Scorer for a signal, or aggregate the rubric. All production LLM I/O uses one OpenAI model (`OPENAI_MODEL`, default `gpt-5.5`) with fast reasoning (`OPENAI_REASONING_EFFORT=low`) loaded from `.env`; the wrapper still provides retries, deadlines, deterministic test fakes, and JSON extraction tolerant of markdown fences.
 
 ## How to read this folder
 
@@ -125,7 +125,7 @@ templates/
 - **Event log is truth.** State is a projection. Replayable.
 - **Hexagonal core.** Five contracts (`Challenger`, `Examiner`, `Scorer`, `Runtime`, `UIAdapter`) + two support contracts (`ModelRouter`, `ProfileSource`, `PersonaLoader`). Everything else is an adapter.
 - **Agent persona as data.** Personas are markdown (`IDENTITY.md` + `SOUL.md` + `TOOLS.md`), not hardcoded prompts.
-- **Speed is a constraint, not a polish.** Latency budgets are test assertions from day one. Token streaming + prompt caching + 2-tier model routing + scorers-off-critical-path.
+- **Speed is a constraint, not a polish.** Latency budgets are test assertions from day one. Token streaming + prompt caching + a single fast OpenAI model + scorers-off-critical-path.
 - **Humanly is designed, not emergent.** Named examiner, typing indicator, backchannels, pacing floor, graceful repair, stress dampening, warm open/close, break offer.
 - **Profile ingestion is privacy-first.** Per-source consent, PII strip before any agent reads anything, demographic signals dropped, 30-day retention default.
 
@@ -135,12 +135,12 @@ templates/
 |---|---|---|
 | 0 | Backbone skeleton (domain, event log, projections, orchestrator, contracts) | ✅ shipped |
 | 1 | Thin slice end-to-end over HTTP with dummy adapters | ✅ shipped |
-| 1.5 | `CandidateIntake` with resume source; USER.md populated; consent screen | planned |
-| 2 | LLM Challenger, calibrated from USER.md | ✅ shipped (no USER.md yet) |
-| 3 | LLM Examiner + humanly texture (streaming, pacing, backchannels, named persona) | partial |
+| 1.5 | `CandidateIntake` text/resume-paste MVP; USER.md populated; consent fields | ✅ shipped (file upload pending) |
+| 2 | LLM Challenger, calibrated from USER.md | ✅ shipped |
+| 3 | LLM Examiner + humanly texture (streaming, pacing, backchannels, named persona) | partial; backchannels + USER.md context shipped |
 | 4 | Subprocess Runtime adapter (resource-limited) | ✅ shipped |
 | 5 | Rationale + Communication Scorers; rubric aggregator | ✅ shipped |
-| 6 | Candidate chat UI + Recruiter dashboard | ✅ chat UI; dashboard pending |
+| 6 | Candidate chat UI + Recruiter dashboard | ✅ chat UI; server-rendered evidence MVP shipped |
 | next | Recruiter workflows + stronger candidate intake | up next |
 | post-MVP | Proctor, ATS sync, bias audit, messy-data generator, LinkedIn/blog/GitHub profile sources | — |
 
@@ -153,8 +153,8 @@ templates/
 
 ## Next up
 
-- `CandidateIntake` so the Challenger can calibrate from a real resume.
-- Recruiter dashboard over the event log.
+- File-upload `ResumeSource` on top of the shipped text/paste `CandidateIntake` MVP.
+- Recruiter workflow hardening beyond the shipped server-rendered evidence MVP.
 - Production-hardening the voice adapters (real latency telemetry, stronger resume-deep-dive prompts, richer fallback UX).
 
 **Runtime Sandbox**

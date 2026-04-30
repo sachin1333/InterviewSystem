@@ -9,6 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal, cast
 
 from adapters.challenger.llm_challenger import LlmChallenger
@@ -31,6 +32,7 @@ from core.domain import (
 )
 from core.events import (
     ArtifactAttached,
+    BackchannelPosted,
     CoverageSnapshot,
     Envelope,
     ExaminerFailed,
@@ -100,6 +102,7 @@ class SessionRunner:
     case: CaseDefinition | None = None
     # Phase 2.2: per-problem probe safety cap.
     max_probes_per_problem: int = 6
+    session_workspace_root: Path = Path("outputs") / "sessions"
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -409,8 +412,16 @@ class SessionRunner:
             idem_key=f"problem-closed:{problem_id}",
         )
 
+
+    def _load_user_context(self, session_id: str) -> str:
+        path = self.session_workspace_root / session_id / "USER.md"
+        try:
+            return path.read_text(encoding="utf8")
+        except OSError:
+            return ""
+
     def _do_challenge(self, session_id: str, log: EventLog) -> None:
-        prompts = list(self.challenger.propose_prompts(session_id))
+        prompts = list(self.challenger.propose_prompts(session_id, user_context=self._load_user_context(session_id)))
         prompt_text = prompts[0] if prompts else "(no question generated)"
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
         artifact_id = f"a-{uuid.uuid4().hex[:8]}"
@@ -455,7 +466,7 @@ class SessionRunner:
         elif prompt_seed:
             prompt_text = prompt_seed
         else:
-            prompts = list(self.challenger.propose_prompts(session_id))
+            prompts = list(self.challenger.propose_prompts(session_id, user_context=self._load_user_context(session_id)))
             prompt_text = prompts[0] if prompts else "(no question generated)"
 
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
@@ -555,7 +566,7 @@ class SessionRunner:
         # ── Ask examiner ──
         failure: ExaminerFailed | None = None
         if self.examiner is not None:
-            outcome, failure = self.examiner.review(session_id, [], coverage=coverage)
+            outcome, failure = self.examiner.review(session_id, [], coverage=coverage, user_context=self._load_user_context(session_id))
 
             if outcome.action == "close" and current_problem_id is not None:
                 self._do_close_problem(
@@ -584,6 +595,14 @@ class SessionRunner:
                 "before committing to a model or recommendation."
             )
         first_token_ms = _elapsed_ms(started) if probe_text else context_assembled_ms
+
+        if probe_text:
+            self._append(
+                session_id,
+                log,
+                BackchannelPosted(message="got it"),
+                idem_key=f"backchannel-before-probe:{last_candidate_turn_id}",
+            )
 
         # ── Post probe turn ──
         turn_id = f"t-{uuid.uuid4().hex[:8]}"
@@ -744,11 +763,13 @@ class SessionRunner:
         # The heuristic scorer uses "artifact://{id}" which doesn't match.
         if artifact_id not in signal.source_refs:
             signal = Signal(
+                id=signal.id,
                 dimension=signal.dimension,
                 value=signal.value,
                 confidence=signal.confidence,
                 source_refs=(artifact_id,),
                 emitted_by=signal.emitted_by,
+                justification=signal.justification,
                 at=signal.at,
             )
 

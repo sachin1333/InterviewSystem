@@ -52,11 +52,14 @@ class LlmChallenger(Challenger):
         except OSError:
             return ""
 
-    def _compose_prompt(self, session_id: str) -> str:
+    def _compose_prompt(self, session_id: str, *, user_context: str = "") -> str:
         identity = self._load_template("IDENTITY.md")
         soul = self._load_template("SOUL.md")
         tools = self._load_template("TOOLS.md")
-        return "\n\n".join([identity, soul, tools, f"Session: {session_id}"])
+        parts = [identity, soul, tools, f"Session: {session_id}"]
+        if user_context.strip():
+            parts.append("## Candidate profile\n\n" + user_context.strip())
+        return "\n\n".join(parts)
 
     def _fallback_prompt(self) -> str:
         try:
@@ -65,7 +68,7 @@ class LlmChallenger(Challenger):
             return self.inline_fallback_prompt
         return prompt or self.inline_fallback_prompt
 
-    def propose_prompts(self, session_id: str) -> Iterable[str]:
+    def propose_prompts(self, session_id: str, *, user_context: str = "") -> Iterable[str]:
         if self.case_bank is not None and len(self.case_bank) > 0:
             try:
                 picked = self.case_bank.pick_for_session(session_id)
@@ -76,7 +79,7 @@ class LlmChallenger(Challenger):
         try:
             payload = self.model_router.call_json(
                 tier="top",
-                prompt=self._compose_prompt(session_id),
+                prompt=self._compose_prompt(session_id, user_context=user_context),
                 schema={"prompt_markdown", "turn_kind"},
                 deadline_ms=8000,
             )

@@ -5,8 +5,10 @@
   <title>DS/ML Interview</title>
   <style>
     body { font-family: monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-    label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
-    input[type=text] { width: 100%; box-sizing: border-box; padding: 0.4rem; font-size: 1rem; }
+    label { display: block; margin: 0.8rem 0 0.5rem; font-weight: bold; }
+    input[type=text], textarea { width: 100%; box-sizing: border-box; padding: 0.4rem; font-size: 1rem; font-family: inherit; }
+    fieldset { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; }
+    legend { font-weight: bold; }
     button { margin-top: 1rem; padding: 0.5rem 1.5rem; font-size: 1rem; cursor: pointer; }
     .note { color: #555; font-size: 0.9rem; margin-top: 0.5rem; }
   </style>
@@ -19,6 +21,27 @@
     <label for="handle">Your name or handle</label>
     <input id="handle" name="candidate_handle" type="text" required autofocus placeholder="e.g. alice">
     <p class="note">This is used only to label your session. No account required.</p>
+
+    <fieldset>
+      <legend>Optional personalization context</legend>
+      <p class="note">Only provide what you consent to use for interview personalization. We strip common contact details before interviewer agents see it.</p>
+
+      <label for="candidate_role">Role applied for</label>
+      <input id="candidate_role" name="candidate_role" type="text" placeholder="e.g. ML Engineer">
+
+      <label for="years_experience">Years of experience</label>
+      <input id="years_experience" name="years_experience" type="text" placeholder="e.g. 4">
+
+      <label for="declared_skills">Declared skills</label>
+      <input id="declared_skills" name="declared_skills" type="text" placeholder="Python, PyTorch, SQL">
+
+      <label for="resume_text">Resume/profile notes</label>
+      <textarea id="resume_text" name="resume_text" rows="8" placeholder="Paste resume text or relevant project details"></textarea>
+
+      <label for="other_details">Anything else to personalize the interview</label>
+      <textarea id="other_details" name="other_details" rows="4"></textarea>
+    </fieldset>
+
     <button type="submit">Start interview</button>
   </form>
 </body>

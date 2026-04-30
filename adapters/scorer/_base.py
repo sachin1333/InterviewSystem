@@ -157,12 +157,19 @@ class BaseLlmScorer(Scorer):
         else:
             raise ValueError("source_refs must be a list when provided")
 
+        justification = str(
+            raw_signal.get("justification")
+            or raw_signal.get("rationale")
+            or f"{self.scorer_name} scored {self.dimension.value} from artifact {artifact.id}."
+        ).strip()
         return Signal(
+            id=f"sig-{artifact.id}-{self.dimension.value}",
             dimension=self.dimension,
             value=value,
             confidence=confidence,
             source_refs=source_refs or (f"artifact://{artifact.id}",),
             emitted_by=self.scorer_name,
+            justification=justification,
             at=datetime.now(UTC),
         )
 
@@ -171,11 +178,16 @@ class BaseLlmScorer(Scorer):
         hit = any(keyword in body for keyword in self.heuristic_keywords)
         value = self.heuristic_hit_value if hit else self.heuristic_miss_value
         return Signal(
+            id=f"sig-{artifact.id}-{self.dimension.value}-heuristic",
             dimension=self.dimension,
             value=value,
             confidence=0.2,
             source_refs=(f"artifact://{artifact.id}",),
             emitted_by=f"{self.scorer_name}:heuristic",
+            justification=(
+                f"Heuristic fallback for {self.dimension.value}: "
+                f"{'matched' if hit else 'did not match'} configured keywords."
+            ),
             at=datetime.now(UTC),
         )
 

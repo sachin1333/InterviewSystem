@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Recruiter evidence — {{ session_id }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 920px; margin: 2rem auto; padding: 0 1rem; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+    .muted { color: #666; }
+    textarea, input, select { width: 100%; box-sizing: border-box; margin: .25rem 0 .75rem; padding: .45rem; }
+    button { padding: .55rem 1rem; }
+    code { background: #f3f3f3; padding: .1rem .25rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Recruiter evidence</h1>
+  <p class="muted">Session {{ session_id }}</p>
+  {% if score %}
+    <h2>Composite score: {{ '%.2f'|format(score.composite) }}</h2>
+    <p>Rubric {{ score.rubric_version }}</p>
+  {% else %}
+    <h2>Composite score: partial</h2>
+  {% endif %}
+
+  {% for dim in dimensions %}
+    <section class="card">
+      <h3>{{ dim.name }} {% if dim.value is not none %}— {{ '%.2f'|format(dim.value) }}{% else %}— partial{% endif %}</h3>
+      {% for signal in dim.signals %}
+        <article class="card">
+          <p><strong>{{ signal.emitted_by }}</strong> · {{ '%.2f'|format(signal.value) }} confidence {{ '%.2f'|format(signal.confidence) }}</p>
+          <p>{{ signal.justification }}</p>
+          <p>Sources:
+          {% for ref in signal.source_refs %}<code>{{ ref }}</code> {% endfor %}
+          </p>
+        </article>
+      {% endfor %}
+    </section>
+  {% endfor %}
+
+  <section class="card">
+    <h2>Human override</h2>
+    <form method="post" action="/recruiter/sessions/{{ session_id }}/overrides">
+      <label>Dimension</label>
+      <select name="dimension">
+        {% for dim in dimensions %}<option value="{{ dim.name }}">{{ dim.name }}</option>{% endfor %}
+      </select>
+      <label>Original value</label>
+      <input name="original_value" type="text" value="0.0" required>
+      <label>Override value</label>
+      <input name="override_value" type="text" required>
+      <label>Reviewer ID</label>
+      <input name="reviewer_id" type="text" required>
+      <label>Reason</label>
+      <textarea name="reason" rows="4" required></textarea>
+      <label>Source refs (comma separated)</label>
+      <input name="source_refs" type="text" required>
+      <button type="submit">Append override</button>
+    </form>
+  </section>
+</body>
+</html>

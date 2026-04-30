@@ -1,6 +1,9 @@
-"""Task → default tier mapping.
+"""Task → timeout tier labels.
 
-Overridable via config/tier_overrides.yaml.
+Production model routing has been removed: OpenAI calls use one model from
+``OPENAI_MODEL`` regardless of this label.  The existing labels remain as a
+compatibility seam for deadline/timeout behavior until upstream call sites are
+simplified.
 """
 from __future__ import annotations
 

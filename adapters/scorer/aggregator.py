@@ -78,7 +78,11 @@ class RubricAggregator:
                 insufficient_dimensions.append(dimension)
                 continue
 
-            dimension_score = self._dimension_score(dimension_signals)
+            reviewer_signals = [
+                signal for signal in dimension_signals
+                if signal.emitted_by.startswith("reviewer:")
+            ]
+            dimension_score = self._dimension_score(reviewer_signals or dimension_signals)
             if dimension_score is None:
                 insufficient_dimensions.append(dimension)
                 continue

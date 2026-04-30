@@ -91,7 +91,8 @@ def test_session_runner_draws_problem_sequence_from_bank(tmp_path: Path) -> None
     assert record["current_problem_id"] == expected_first.id
 
 
-def test_create_app_loads_problem_bank_for_new_sessions(tmp_path: Path) -> None:
+def test_create_app_loads_problem_bank_for_new_sessions(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("FAKE_LLM", "1")
     app = create_app(db_path=str(tmp_path / "app.db"))
 
     runner: SessionRunner = app.state.runner
@@ -102,7 +103,8 @@ def test_create_app_loads_problem_bank_for_new_sessions(tmp_path: Path) -> None:
     assert runner.examiner is not None
 
 
-def test_create_app_chat_rubric_matches_scored_dimensions(tmp_path: Path) -> None:
+def test_create_app_chat_rubric_matches_scored_dimensions(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("FAKE_LLM", "1")
     app = create_app(db_path=str(tmp_path / "app.db"))
     runner: SessionRunner = app.state.runner
 

@@ -1,4 +1,2 @@
-# Task-level tier overrides (task_key: tier).
-# Overrides TASK_TIER_MAP in adapters/llm/task_tier_map.py
-# Example:
-# scorer.communication: top
+# Deprecated: production no longer routes tasks to different models.
+# All production LLM calls use OPENAI_MODEL from .env.

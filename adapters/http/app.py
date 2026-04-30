@@ -34,14 +34,20 @@ from adapters.http.voice_protocol import (
     ServerStageChange,
     ServerTtsChunk,
 )
+from core.candidate_intake import build_profile, render_user_md
 from core.contracts import EventLog
-from core.domain import Actor, ArtifactKind, TurnKind
+from core.domain import Actor, ArtifactKind, Dimension, Signal, TurnKind
 from core.events import (
     ArtifactAttached,
+    BackchannelPosted,
     CandidateJoined,
     Envelope,
+    HumanOverride,
     ProblemIntroduced,
+    ProfileIngested,
+    ScoreComputed,
     SessionStarted,
+    SignalEmitted,
     TurnPosted,
     TurnTimingObserved,
 )
@@ -86,6 +92,8 @@ def _conversation_messages(session_id: str, log: EventLog) -> list[dict[str, str
                 "role": "boundary",
                 "text": f"Problem {payload.ordinal}",
             })
+        elif isinstance(payload, BackchannelPosted):
+            out.append({"role": "interviewer", "text": payload.message})
         elif isinstance(payload, TurnPosted):
             chunks = artifacts_by_turn.get(payload.id, [])
             if not chunks:
@@ -140,6 +148,52 @@ def _probe_stream_pending(session_id: str, log: EventLog) -> bool:
     return False
 
 
+
+
+def _append_event(log: EventLog, session_id: str, payload: object) -> Envelope:
+    env = Envelope(
+        session_id=session_id,
+        seq=(log.last_seq(session_id) or 0) + 1,
+        at=datetime.now(UTC),
+        payload=payload,
+    )
+    return log.append(env)
+
+def _score_evidence(session_id: str, log: EventLog) -> dict[str, object]:
+    """Build recruiter evidence from append-only events only."""
+    _, scores, _, _, _ = replay(session_id, log)
+    score = scores.get(session_id)
+    signals: list[Signal] = []
+    overrides: list[HumanOverride] = []
+    for env in log.get_session(session_id):
+        payload = env.payload
+        if isinstance(payload, SignalEmitted):
+            signals.append(payload.signal)
+        elif isinstance(payload, HumanOverride):
+            overrides.append(payload)
+
+    dimensions: list[dict[str, object]] = []
+    dimension_names: set[str] = set()
+    if score is not None:
+        dimension_names.update(dim.value for dim in score.per_dimension)
+    dimension_names.update(signal.dimension.value for signal in signals)
+    for name in sorted(dimension_names):
+        dim_signals = [signal for signal in signals if signal.dimension.value == name]
+        value = None
+        if score is not None:
+            for dim, score_value in score.per_dimension.items():
+                if dim.value == name:
+                    value = score_value
+                    break
+        dimensions.append({"name": name, "value": value, "signals": dim_signals})
+
+    return {
+        "session_id": session_id,
+        "score": score,
+        "dimensions": dimensions,
+        "overrides": overrides,
+    }
+
 def _session_record_or_404(session_id: str, log: EventLog) -> dict[str, object]:
     """Return a started session projection or reject invalid candidate writes."""
     sessions, _, _, _, _ = replay(session_id, log)
@@ -179,6 +233,8 @@ def make_app(
     app.state.target_answers = target_answers
     app.state.max_probes = max_probes
     app.state.rubric_version = rubric_version
+    app.state.output_dir = Path(output_dir) if output_dir is not None else Path("outputs")
+    runner.session_workspace_root = app.state.output_dir / "sessions"
     app.state.pack_registry = pack_registry or PackRegistry()
     app.state.voice_runner = voice_runner
     app.state.voice_mode = voice_mode
@@ -200,6 +256,11 @@ def make_app(
     async def create_session(
         candidate_handle: Annotated[str, Form()],
         pack_id: Annotated[str, Form()] = "ds-ml-v1",
+        candidate_role: Annotated[str, Form()] = "",
+        years_experience: Annotated[str, Form()] = "",
+        declared_skills: Annotated[str, Form()] = "",
+        resume_text: Annotated[str, Form()] = "",
+        other_details: Annotated[str, Form()] = "",
     ) -> RedirectResponse:
         session_id = f"s-{uuid.uuid4().hex[:12]}"
         _log: EventLog = app.state.log
@@ -216,11 +277,38 @@ def make_app(
                 pack_id=pack_id,
             ),
         ))
+        handle = candidate_handle.strip() or "candidate"
         _log.append(Envelope(
             session_id=session_id,
             seq=2,
             at=now,
-            payload=CandidateJoined(candidate_handle=candidate_handle.strip() or "candidate"),
+            payload=CandidateJoined(candidate_handle=handle),
+        ))
+
+        profile = build_profile(
+            candidate_handle=handle,
+            declared_role=candidate_role,
+            years_experience=years_experience,
+            declared_skills_text=declared_skills,
+            resume_text=resume_text,
+            other_details=other_details,
+        )
+        session_dir = app.state.output_dir / "sessions" / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        user_md_path = session_dir / "USER.md"
+        user_md_path.write_text(render_user_md(profile), encoding="utf8")
+        _log.append(Envelope(
+            session_id=session_id,
+            seq=3,
+            at=now,
+            payload=ProfileIngested(
+                profile_id=f"profile-{session_id}",
+                declared_role=profile.declared_role,
+                years_experience=profile.years_experience,
+                declared_skills=profile.declared_skills,
+                claims=profile.claims,
+                user_md_path=str(user_md_path),
+            ),
         ))
         return RedirectResponse(f"/sessions/{session_id}", status_code=303)
 
@@ -411,6 +499,63 @@ def make_app(
             "problem_scores": problem_scores,
             "feedback_md": feedback_md,
         })
+
+
+    # ------------------------------------------------------------------ #
+    #  Recruiter evidence view                                            #
+    # ------------------------------------------------------------------ #
+
+    @app.get("/recruiter/sessions/{session_id}", response_class=HTMLResponse)
+    async def recruiter_session(request: Request, session_id: str) -> HTMLResponse:
+        evidence = _score_evidence(session_id, app.state.log)
+        return templates.TemplateResponse(request, "recruiter_session.html", {
+            "request": request,
+            **evidence,
+        })
+
+    @app.post("/recruiter/sessions/{session_id}/overrides")
+    async def recruiter_override(
+        session_id: str,
+        dimension: Annotated[str, Form()],
+        original_value: Annotated[str, Form()],
+        override_value: Annotated[str, Form()],
+        reviewer_id: Annotated[str, Form()],
+        reason: Annotated[str, Form()],
+        source_refs: Annotated[str, Form()],
+    ) -> RedirectResponse:
+        _log: EventLog = app.state.log
+        dim = Dimension(dimension)
+        refs = tuple(ref.strip() for ref in source_refs.replace("\n", ",").split(",") if ref.strip())
+        signal_id = f"sig-reviewer-{uuid.uuid4().hex[:8]}"
+        override = HumanOverride(
+            target_signal_dimension=dim,
+            original_value=float(original_value),
+            override_value=float(override_value),
+            reviewer_id=reviewer_id.strip() or "reviewer",
+            reason=reason,
+            source_refs=refs,
+            emitted_signal_id=signal_id,
+        )
+        reviewer_signal = Signal(
+            id=signal_id,
+            dimension=dim,
+            value=float(override_value),
+            confidence=1.0,
+            source_refs=refs,
+            emitted_by=f"reviewer:{override.reviewer_id}",
+            justification=reason.strip(),
+            at=datetime.now(UTC),
+        )
+        _append_event(_log, session_id, override)
+        _append_event(_log, session_id, SignalEmitted(signal=reviewer_signal))
+        signals = [
+            env.payload.signal
+            for env in _log.get_session(session_id)
+            if isinstance(env.payload, SignalEmitted)
+        ]
+        result = app.state.runner.aggregator.aggregate(session_id, signals)
+        _append_event(_log, session_id, ScoreComputed(score=result.score))
+        return RedirectResponse(f"/recruiter/sessions/{session_id}", status_code=303)
 
     # ------------------------------------------------------------------ #
     #  WebSocket voice interview                                          #
