@@ -108,3 +108,29 @@
 - Observability platform and dashboards.
 - Full security/privacy hardening beyond MVP redaction.
 - Post-MVP/v1 integrations and differentiators.
+
+---
+
+# Current Task — Chat Workflow Robustness and Realtime Verification
+
+## Scope
+- Candidate chat workflow only: start session, personalized context intake, challenger opener, answer submission, examiner probe/backchannel, scoring/aggregation, result and recruiter evidence read paths.
+- Voice workflow deferred.
+- Realtime target: candidate-facing chat requests should complete in 1–3 seconds under normal model latency assumptions; local deterministic fake path should stay far below that.
+
+## Plan
+- [x] Run focused chat workflow robustness tests.
+- [x] Run latency-focused tests and collect wall-clock timings for start, turn submit, and next interviewer response.
+- [x] Run full regression suite to catch cross-cutting breakage.
+- [x] If failures occur, root-cause before fixing.
+- [x] Document evidence and any caveats.
+
+## Review
+- Focused chat robustness suite: `rtk uv run pytest -q tests/integration/test_http_happy.py tests/integration/test_continuous_chat_ui.py tests/integration/test_text_socratic_flow.py tests/integration/test_chat_turn_submission_guards.py tests/integration/test_chat_advance_idempotency.py tests/integration/test_http_double_submit.py tests/integration/test_e2e_happy.py tests/integration/test_e2e_double_submit.py tests/integration/test_e2e_concurrent.py tests/integration/test_e2e_crash_resume.py tests/integration/test_e2e_llm_chaos.py tests/integration/test_e2e_runtime_chaos.py tests/integration/test_first_paint_latency.py tests/integration/test_turn_timing_events.py tests/integration/test_probe_sse.py tests/integration/test_probe_persistence.py tests/integration/test_candidate_intake_http.py tests/integration/test_examiner_personalized_pacing.py tests/integration/test_recruiter_evidence_view.py tests/integration/test_chat_latency_budget.py` -> 42 passed.
+- Latency smoke with simulated 750ms/model call after fix:
+  - `POST /sessions -> first chat paint`: 0.772s.
+  - `POST answer (redirect issued)`: 0.003s.
+  - `GET /sessions -> examiner probe paint`: 1.508s.
+- Root cause found and fixed: `LlmExaminer.review()` retried around `ModelRouter.call_json()`, while `call_json()` already performs bounded JSON retry. Malformed examiner JSON therefore caused four provider calls and crossed 3s. Removed duplicate adapter-level retry.
+- Quality gates: `rtk uv run ruff check core adapters tests` -> pass; `rtk uv run mypy core adapters tests/unit/test_candidate_intake.py tests/unit/test_personalized_prompts.py tests/unit/test_scorer_evidence.py tests/unit/test_human_override.py` -> pass; `rtk uv run pytest -q` -> full suite pass; `rtk git diff --check` -> pass.
+- Caveat: latency test uses deterministic `FakeRouter` with simulated model delay. Real OpenAI latency can still vary by network/provider load; this verifies app-side chat orchestration stays inside the 1–3s target when the model dependency is moderately slow.

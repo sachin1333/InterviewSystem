@@ -124,7 +124,7 @@ class LlmExaminer(Examiner):
     ) -> tuple[ExaminerOutcome, ExaminerFailed | None]:
         """Call the LLM and parse a probe-or-close decision.
 
-        Retries once on malformed JSON before returning a failure outcome.
+        Uses the router's bounded JSON retry before returning a failure outcome.
         """
         prompt = self._compose_prompt(
             session_id, recent_turns, memory_text, coverage=coverage, user_context=user_context
@@ -133,26 +133,20 @@ class LlmExaminer(Examiner):
         # "rationale" is also expected but tolerated as empty string on miss.
         schema: set[str] = {"action"}
 
-        for attempt in range(2):
-            try:
-                payload = self.model_router.call_json(
-                    tier=tier_for("examiner.probe"),
-                    prompt=prompt,
-                    schema=schema,
-                    deadline_ms=2000,
-                )
-                outcome = self._parse_outcome(payload)
-                return outcome, None
-            except Exception as exc:
-                if attempt == 0:
-                    # One-shot retry on any parse/LLM error.
-                    continue
-                return (
-                    ExaminerOutcome(ok_to_advance=True),
-                    ExaminerFailed(reason=str(exc) or exc.__class__.__name__),
-                )
-        # unreachable
-        return ExaminerOutcome(ok_to_advance=True), None
+        try:
+            payload = self.model_router.call_json(
+                tier=tier_for("examiner.probe"),
+                prompt=prompt,
+                schema=schema,
+                deadline_ms=2000,
+            )
+            outcome = self._parse_outcome(payload)
+            return outcome, None
+        except Exception as exc:
+            return (
+                ExaminerOutcome(ok_to_advance=True),
+                ExaminerFailed(reason=str(exc) or exc.__class__.__name__),
+            )
 
     def iter_review(
         self,
