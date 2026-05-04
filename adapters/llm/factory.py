@@ -7,6 +7,7 @@ from pathlib import Path
 from adapters.llm.fake_router import FakeRouter
 from adapters.llm.openai_router import OpenAIRouter
 from adapters.llm.router import ModelRouter, RouterProvider
+from core.observability import GLOBAL_METRICS
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,7 +37,7 @@ def get_model_router(
             reasoning_effort=environment.get("OPENAI_REASONING_EFFORT"),
         )
 
-    return ModelRouter(provider)
+    return ModelRouter(provider, metrics=GLOBAL_METRICS)
 
 
 def _environment_with_dotenv(dotenv_path: str | Path | None) -> Mapping[str, str]:

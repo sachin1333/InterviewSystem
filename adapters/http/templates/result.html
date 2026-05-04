@@ -6,6 +6,9 @@
   <style>
     body { font-family: monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
     .score-box { background: #f0f8f0; border-left: 4px solid #2a7; padding: 1rem; margin-bottom: 1.5rem; }
+    .pending-box { background: #fff8e5; border-left: 4px solid #d89b00; padding: 1rem; margin-bottom: 1.5rem; }
+    .partial-box { background: #eef5ff; border-left: 4px solid #47f; padding: 1rem; margin-bottom: 1.5rem; }
+    .badge { display: inline-block; font-weight: bold; padding: .15rem .4rem; border-radius: .25rem; background: #d89b00; color: #fff; }
     .problem-score { border: 1px solid #ddd; padding: 1rem; margin: .75rem 0; }
     .bar { background: #eee; height: .7rem; margin: .25rem 0 .75rem; }
     .bar span { display: block; height: 100%; background: #2a7; }
@@ -26,6 +29,16 @@
       <li>{{ dim }}: {{ "%.2f"|format(val) }}</li>
     {% endfor %}
     </ul>
+  </div>
+  {% elif scoring_pending %}
+  <div class="pending-box" role="status">
+    <span class="badge">Scoring in progress</span>
+    <p>Scoring in progress. Refresh this page to see partial and final results as they become available.</p>
+  </div>
+  {% elif problem_scores %}
+  <div class="partial-box">
+    <strong>Partial score</strong>
+    <p>Per-problem scores are available below. The final composite score is still absent.</p>
   </div>
   {% else %}
   <p class="no-score">Score not yet computed.</p>

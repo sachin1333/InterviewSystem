@@ -114,6 +114,20 @@ class PerProblemScoreComputed(_Evt):
     score: Score
 
 
+class ScoringRequested(_Evt):
+    """Problem-scoped scoring work has been requested for artifacts/dimensions."""
+
+    problem_id: ProblemId
+    artifact_ids: tuple[str, ...]
+    dimensions: tuple[Dimension, ...]
+
+
+class ScoringCompleted(_Evt):
+    """Problem-scoped scoring work has completed."""
+
+    problem_id: ProblemId
+
+
 # --- adapter failure audit -----------------------------------------------
 
 class ChallengerFailed(_Evt):
@@ -264,7 +278,8 @@ class ProblemPlanSelected(_Evt):
 
     problem_ids: tuple[ProblemId, ...]
     bank_version: str | None = None
-    source: Literal["explicit", "problem_bank"]
+    source: Literal["explicit", "problem_bank", "profile_aware_selector"]
+    selection_rationale: dict[str, tuple[str, ...]] = Field(default_factory=dict)
 
 
 class ProblemClosed(_Evt):
@@ -319,7 +334,7 @@ EVENT_TYPES: set[type] = {
     # runtime
     RuntimeExecuted, RuntimeFailed,
     # scoring
-    SignalEmitted, ScoreComputed, PerProblemScoreComputed,
+    SignalEmitted, ScoreComputed, PerProblemScoreComputed, ScoringRequested, ScoringCompleted,
     # adapter failures
     ChallengerFailed, ExaminerFailed, ScorerFailed,
     # voice

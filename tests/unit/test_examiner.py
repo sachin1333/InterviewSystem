@@ -7,9 +7,11 @@ Examiner now returns probe-or-close JSON:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from adapters.examiner.llm_examiner import CoverageContext, LlmExaminer
 from adapters.llm.router import ModelRouter
+from adapters.llm.structured_schema import examiner_outcome_schema
 from core.domain import Actor, Turn, TurnKind
 
 
@@ -24,8 +26,11 @@ class _StaticProvider:
         prompt: str,
         stream: bool = False,
         timeout: float | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> str:
-        del tier, prompt, stream, timeout
+        del tier, prompt, stream, timeout, json_schema, schema_name, max_completion_tokens
         return self.response
 
 
@@ -37,8 +42,11 @@ class _MalformedProvider:
         prompt: str,
         stream: bool = False,
         timeout: float | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> str:
-        del tier, prompt, stream, timeout
+        del tier, prompt, stream, timeout, json_schema, schema_name, max_completion_tokens
         return "not-json"
 
 
@@ -78,11 +86,29 @@ def test_examiner_returns_probe_outcome_from_llm_json() -> None:
 
 def test_examiner_uses_configured_task_tier_for_probe_decision() -> None:
     tiers: list[str] = []
+    structured: list[dict[str, Any]] = []
 
     class _TierCapturingProvider:
-        def call(self, *, tier, prompt, stream=False, timeout=None):
+        def call(
+            self,
+            *,
+            tier,
+            prompt,
+            stream=False,
+            timeout=None,
+            json_schema=None,
+            schema_name=None,
+            max_completion_tokens=None,
+        ):
             del prompt, stream, timeout
             tiers.append(tier)
+            structured.append(
+                {
+                    "json_schema": json_schema,
+                    "schema_name": schema_name,
+                    "max_completion_tokens": max_completion_tokens,
+                }
+            )
             return '{"action":"probe","text":"What trade-off worries you most?","rationale":"follow-up"}'
 
     router = ModelRouter(_TierCapturingProvider(), sleep=lambda _: None)
@@ -93,6 +119,13 @@ def test_examiner_uses_configured_task_tier_for_probe_decision() -> None:
     assert failure is None
     assert outcome.action == "probe"
     assert tiers == ["mid"]
+    assert structured == [
+        {
+            "json_schema": examiner_outcome_schema(),
+            "schema_name": "examiner_outcome",
+            "max_completion_tokens": 500,
+        }
+    ]
 
 
 def test_examiner_returns_close_outcome() -> None:
@@ -157,7 +190,7 @@ def test_examiner_injects_coverage_into_prompt() -> None:
     captured: list[str] = []
 
     class _CapturingProvider:
-        def call(self, *, tier, prompt, stream=False, timeout=None):
+        def call(self, *, tier, prompt, stream=False, timeout=None, **_kwargs):
             captured.append(prompt)
             return '{"action":"probe","text":"Explain your metric choice.","rationale":"experiment_design under-served"}'
 
@@ -184,7 +217,7 @@ def test_coverage_context_includes_problem_guidance_in_prompt() -> None:
     captured: list[str] = []
 
     class _CapturingProvider:
-        def call(self, *, tier, prompt, stream=False, timeout=None):
+        def call(self, *, tier, prompt, stream=False, timeout=None, **_kwargs):
             del tier, stream, timeout
             captured.append(prompt)
             return '{"action":"probe","text":"Why?","rationale":"need more"}'

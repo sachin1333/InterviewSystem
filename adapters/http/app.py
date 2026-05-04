@@ -69,6 +69,7 @@ from core.session_boot import replay
 
 if TYPE_CHECKING:
     from adapters.http.voice_runner import VoiceRunner
+    from adapters.scorer.background_worker import BackgroundScoringWorker
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -80,6 +81,19 @@ def _last_interviewer_has_text(messages: list[dict[str, str]]) -> bool:
         if m["role"] == "interviewer":
             return bool(m["text"].strip())
     return False
+
+
+def _metrics_route_label(path: str) -> str:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[0] == "sessions":
+        if len(parts) == 2:
+            return "/sessions/{session_id}"
+        return "/sessions/{session_id}/" + "/".join(parts[2:])
+    if len(parts) >= 3 and parts[0] == "recruiter" and parts[1] == "sessions":
+        if len(parts) == 3:
+            return "/recruiter/sessions/{session_id}"
+        return "/recruiter/sessions/{session_id}/" + "/".join(parts[3:])
+    return path
 
 
 def _conversation_messages(session_id: str, log: EventLog) -> list[dict[str, str]]:
@@ -246,13 +260,26 @@ def make_app(
     voice_runner: VoiceRunner | None = None,
     voice_mode: str = "off",
     voice_latency_budget_ms: int = 800,
+    scoring_worker: BackgroundScoringWorker | None = None,
 ) -> FastAPI:
     """Return a configured FastAPI application.
 
     Parameters are injected rather than read from globals so the same factory
     can be called in tests with fake adapters.
     """
-    app = FastAPI(title="Interview System")
+    lifespan = None
+    if scoring_worker is not None:
+        @contextlib.asynccontextmanager
+        async def scoring_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+            scoring_worker.start()
+            try:
+                yield
+            finally:
+                scoring_worker.stop()
+
+        lifespan = scoring_lifespan
+
+    app = FastAPI(title="Interview System", lifespan=lifespan)
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
     # Mount static files for voice.js and voice.css
@@ -270,6 +297,8 @@ def make_app(
     app.state.voice_runner = voice_runner
     app.state.voice_mode = voice_mode
     app.state.voice_latency_budget_ms = voice_latency_budget_ms
+    app.state.scoring_worker = scoring_worker
+    runner.scoring_worker = scoring_worker
     app.state.metrics = GLOBAL_METRICS
 
     @app.middleware("http")
@@ -278,8 +307,10 @@ def make_app(
         response = await call_next(request)
         elapsed_ms = (time.monotonic() - started) * 1000
         if request.url.path.startswith(("/sessions", "/recruiter")):
-            app.state.metrics.increment("chat_requests_total", labels={"route": request.url.path})
-            app.state.metrics.observe("chat_request_ms", elapsed_ms, labels={"route": request.url.path})
+            app.state.metrics.observe_chat_request(
+                route=_metrics_route_label(request.url.path),
+                elapsed_ms=elapsed_ms,
+            )
         return response
 
     # ------------------------------------------------------------------ #
@@ -541,9 +572,16 @@ def make_app(
     @app.get("/sessions/{session_id}/result", response_class=HTMLResponse)
     async def get_result(request: Request, session_id: str) -> HTMLResponse:
         _log: EventLog = app.state.log
+        runner_for_result: SessionRunner = app.state.runner
+        # Opportunistically finalize aggregation once background scoring has
+        # emitted the last required signals. If scoring is still pending,
+        # SessionRunner returns without blocking so the result shell stays fast.
+        runner_for_result.advance(session_id, _log)
         _, scores, _, _, _ = replay(session_id, _log)
         score = scores.get(session_id)
         problem_scores = scores.get_problem_scores(session_id)
+        scoring_pending = scores.is_scoring_pending(session_id)
+        completed_problem_ids = scores.completed_problem_ids(session_id)
 
         feedback_md = ""
         if output_dir is not None:
@@ -557,6 +595,8 @@ def make_app(
             "session_id": session_id,
             "score": score,
             "problem_scores": problem_scores,
+            "scoring_pending": scoring_pending,
+            "completed_problem_ids": completed_problem_ids,
             "feedback_md": feedback_md,
         })
 
@@ -814,11 +854,13 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
     from adapters.llm.factory import get_model_router
     from adapters.scorer.aggregator import RubricAggregator
     from adapters.scorer.authenticity_scorer import AuthenticityScorer
+    from adapters.scorer.background_worker import BackgroundScoringWorker, ProblemScoringJobAdapter
     from adapters.scorer.llm_communication_scorer import LlmCommunicationScorer
     from adapters.scorer.llm_experiment_design_scorer import LlmExperimentDesignScorer
     from adapters.scorer.llm_insight_interp_scorer import LlmInsightInterpScorer
     from adapters.scorer.llm_problem_framing_scorer import LlmProblemFramingScorer
     from adapters.scorer.llm_rationale_scorer import LlmRationaleScorer
+    from adapters.scorer.problem_scorer import ProblemLlmScorer
     from adapters.stt.factory import make_stt
     from adapters.tts.cartesia_sonic import CartesiaSonicTts
     from adapters.tts.elevenlabs_flash import ElevenLabsFlashTts
@@ -869,6 +911,11 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
             Dimension.communication,
         ),
     )
+    scoring_worker = BackgroundScoringWorker(
+        log=log,
+        scorer=ProblemScoringJobAdapter(ProblemLlmScorer(router)),
+        metrics=GLOBAL_METRICS,
+    )
     voice_runner = None
     if voice_mode != "off":
         if tts_mode == "on":
@@ -897,6 +944,7 @@ def create_app(db_path: str = "interview.db") -> FastAPI:
         voice_runner=voice_runner,
         voice_mode=voice_mode,
         voice_latency_budget_ms=voice_latency_budget_ms,
+        scoring_worker=scoring_worker,
     )
 
 

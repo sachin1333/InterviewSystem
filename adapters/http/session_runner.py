@@ -16,6 +16,7 @@ from adapters.challenger.llm_challenger import LlmChallenger
 from adapters.examiner.llm_examiner import CoverageContext, LlmExaminer
 from adapters.scorer._base import BaseLlmScorer
 from adapters.scorer.aggregator import RubricAggregator
+from adapters.scorer.background_worker import BackgroundScoringWorker, ScoringJob
 from core.case_loader import CaseDefinition, CaseStage
 from core.contracts import EventLog
 from core.coverage import CoverageTracker
@@ -44,6 +45,7 @@ from core.events import (
     ProblemPlanSelected,
     ScoreComputed,
     ScorerFailed,
+    ScoringRequested,
     SessionEnded,
     SignalEmitted,
     StageCompleted,
@@ -65,6 +67,7 @@ from core.orchestrator import (
 )
 from core.pacing import Pacer
 from core.problem_bank import ProblemBank
+from core.problem_selection import ProfileAwareProblemSelector, ProfileFeatures
 from core.problem_sequencer import EndSession as SeqEndSession
 from core.problem_sequencer import IntroduceNext, ProblemSequencer
 from core.projections import ArtifactStore, RuntimeStore, ScoreStore, SessionStore, SignalStore
@@ -107,6 +110,7 @@ class SessionRunner:
     max_probes_per_problem: int = 6
     session_workspace_root: Path = Path("outputs") / "sessions"
     pacer: Pacer = field(default_factory=Pacer)
+    scoring_worker: BackgroundScoringWorker | None = None
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -130,6 +134,11 @@ class SessionRunner:
             if plan_missing and planned_problems:
                 continue
             sequencer = ProblemSequencer(planned_problems) if planned_problems else None
+            if self.scoring_worker is not None:
+                if self._async_scoring_ready(session_id, log, scores):
+                    self._do_aggregate(session_id, log)
+                    return RunResult(state="ended", session_id=session_id)
+                self._recover_pending_scoring_jobs(session_id, log, planned_problems, scores)
 
             # ── Phase 2.1: problem-boundary loop (takes priority over stage FSM) ──
             if sequencer is not None:
@@ -236,6 +245,10 @@ class SessionRunner:
                 self._do_execution(session_id, log, action.turn_id, action.artifact_id, artifacts)
 
             elif isinstance(action, RequestScoring):
+                if self.scoring_worker is not None:
+                    if self._async_scoring_ready(session_id, log, scores):
+                        self._do_aggregate(session_id, log)
+                    return RunResult(state="ended", session_id=session_id)
                 self._do_scoring(
                     session_id, log, action.artifact_id, action.dimension,
                     sessions, artifacts,
@@ -247,6 +260,50 @@ class SessionRunner:
 
         return RunResult(state="no_op", session_id=session_id)
 
+    def _async_scoring_ready(
+        self,
+        session_id: str,
+        log: EventLog,
+        scores: ScoreStore,
+    ) -> bool:
+        completed = set(scores.completed_problem_ids(session_id))
+        requested = {
+            env.payload.problem_id
+            for env in log.get_session(session_id)
+            if isinstance(env.payload, ScoringRequested)
+        }
+        return bool(requested) and not scores.is_scoring_pending(session_id) and requested <= completed
+
+    def _recover_pending_scoring_jobs(
+        self,
+        session_id: str,
+        log: EventLog,
+        planned_problems: list[Problem],
+        scores: ScoreStore,
+    ) -> None:
+        if self.scoring_worker is None or not scores.is_scoring_pending(session_id):
+            return
+        completed = set(scores.completed_problem_ids(session_id))
+        for env in log.get_session(session_id):
+            payload = env.payload
+            if not isinstance(payload, ScoringRequested) or payload.problem_id in completed:
+                continue
+            problem = _find_problem(planned_problems, payload.problem_id)
+            candidate_artifacts = _candidate_artifacts_for_problem(
+                session_id, log, str(payload.problem_id)
+            )
+            if not candidate_artifacts:
+                continue
+            self.scoring_worker.enqueue(
+                ScoringJob(
+                    session_id=session_id,
+                    problem_id=payload.problem_id,
+                    artifact_ids=payload.artifact_ids,
+                    dimensions=payload.dimensions,
+                    problem_context=problem.context if problem is not None else "",
+                    candidate_artifacts=candidate_artifacts,
+                )
+            )
 
     @staticmethod
     def _problem_turn_needs_examiner(session_record: object | None) -> bool:
@@ -291,14 +348,29 @@ class SessionRunner:
                         out.append(problem)
                 return out
 
-        selected = self.problem_bank.pick_sequence(session_id)
+        user_context = self._load_user_context(session_id)
+        profile = _profile_features_from_user_context(user_context)
+        if user_context.strip():
+            selection = ProfileAwareProblemSelector().select(
+                session_id,
+                profile,
+                self.problem_bank.entries,
+            )
+            selected = list(selection.problems)
+            source = "profile_aware_selector"
+            selection_rationale = selection.selection_rationale
+        else:
+            selected = self.problem_bank.pick_sequence(session_id)
+            source = "problem_bank"
+            selection_rationale = {}
         self._append(
             session_id,
             log,
             ProblemPlanSelected(
                 problem_ids=tuple(problem.id for problem in selected),
                 bank_version=self.problem_bank.version,
-                source="problem_bank",
+                source=source,
+                selection_rationale=selection_rationale,
             ),
             idem_key="problem-plan-selected",
         )
@@ -406,6 +478,15 @@ class SessionRunner:
     ) -> None:
         """Emit ``ProblemClosed``.  Called by the examiner path in Phase 2.2."""
         from core.domain import ProblemId  # local import; avoids circular at top
+        problem = _find_problem(self._planned_problems(session_id, log), problem_id)
+        dimensions = (
+            tuple(problem.target_dimensions)
+            if problem is not None and problem.target_dimensions
+            else tuple(self.scored_dimensions)
+        )
+        candidate_artifacts = _candidate_artifacts_for_problem(session_id, log, problem_id)
+        artifact_ids = tuple(artifact.id for artifact in candidate_artifacts)
+        already_requested = _has_idem_key(log, session_id, f"scoring-requested:{problem_id}")
         self._append(
             session_id, log,
             ProblemClosed(
@@ -415,6 +496,28 @@ class SessionRunner:
             ),
             idem_key=f"problem-closed:{problem_id}",
         )
+        if artifact_ids and dimensions:
+            self._append(
+                session_id,
+                log,
+                ScoringRequested(
+                    problem_id=ProblemId(problem_id),
+                    artifact_ids=artifact_ids,
+                    dimensions=dimensions,
+                ),
+                idem_key=f"scoring-requested:{problem_id}",
+            )
+            if self.scoring_worker is not None and not already_requested:
+                self.scoring_worker.enqueue(
+                    ScoringJob(
+                        session_id=session_id,
+                        problem_id=ProblemId(problem_id),
+                        artifact_ids=artifact_ids,
+                        dimensions=dimensions,
+                        problem_context=problem.context if problem is not None else "",
+                        candidate_artifacts=candidate_artifacts,
+                    )
+                )
 
 
     def _load_user_context(self, session_id: str) -> str:
@@ -1017,6 +1120,101 @@ def _find_problem(problems: list[Problem], problem_id: str | None) -> Problem | 
         if p.id == problem_id:
             return p
     return None
+
+
+def _has_idem_key(log: EventLog, session_id: str, idem_key: str) -> bool:
+    return any(env.idem_key == idem_key for env in log.get_session(session_id))
+
+
+def _candidate_artifacts_for_problem(
+    session_id: str,
+    log: EventLog,
+    problem_id: str | None,
+) -> tuple[Artifact, ...]:
+    if problem_id is None:
+        return ()
+
+    artifact_content: dict[str, str] = {}
+    for env in log.get_session(session_id):
+        if isinstance(env.payload, ArtifactAttached) and env.payload.content is not None:
+            artifact_content[env.payload.id] = env.payload.content
+
+    artifacts: list[Artifact] = []
+    inside = False
+    candidate_turn_ids: set[str] = set()
+    for env in log.get_session(session_id):
+        payload = env.payload
+        if isinstance(payload, ProblemIntroduced):
+            inside = payload.problem_id == problem_id
+            candidate_turn_ids = set() if inside else candidate_turn_ids
+        elif isinstance(payload, ProblemClosed) and payload.problem_id == problem_id:
+            inside = False
+        elif inside and isinstance(payload, TurnPosted) and payload.actor == Actor.candidate:
+            candidate_turn_ids.add(payload.id)
+        elif (
+            inside
+            and isinstance(payload, ArtifactAttached)
+            and payload.produced_by_turn_id in candidate_turn_ids
+            and payload.kind != ArtifactKind.prompt
+        ):
+            artifacts.append(
+                Artifact(
+                    id=payload.id,
+                    kind=payload.kind,
+                    version=payload.version,
+                    body=artifact_content.get(payload.id, ""),
+                    produced_by_turn_id=payload.produced_by_turn_id,
+                    at=env.at,
+                )
+            )
+    return tuple(artifacts)
+
+
+def _profile_features_from_user_context(user_context: str) -> ProfileFeatures:
+    """Extract selector features from the scrubbed USER.md profile."""
+    role = ""
+    skills: list[str] = []
+    claims: list[str] = []
+    section: str | None = None
+
+    for raw_line in user_context.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("- **Role applied for:**"):
+            role = line.split(":", 1)[1].strip().strip("* ")
+            section = None
+            continue
+        if line.lower().startswith("role:"):
+            role = line.split(":", 1)[1].strip()
+            section = None
+            continue
+        if line.lower().startswith("skills:"):
+            skills.extend(
+                skill.strip()
+                for skill in line.split(":", 1)[1].split(",")
+                if skill.strip()
+            )
+            section = None
+            continue
+        if line == "## Declared skills":
+            section = "skills"
+            continue
+        if line == "## Claims from profile":
+            section = "claims"
+            continue
+        if line.startswith("## "):
+            section = None
+            continue
+        if not line.startswith("- ") or "_(none provided)_" in line:
+            continue
+        value = line[2:].strip().strip('"')
+        if section == "skills":
+            skills.append(value)
+        elif section == "claims":
+            claims.append(value)
+
+    return ProfileFeatures(role_text=role, skills=tuple(skills), claims_text="\n".join(claims))
 
 
 def _build_problem_transcript(

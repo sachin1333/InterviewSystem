@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Generator, Iterable
 
 from adapters.llm.router import CHEAP_TIMEOUT_PLACEHOLDER, ModelRouter
+from core.observability import MetricSink
 
 
 class _AlwaysTimeoutProvider:
@@ -60,6 +62,25 @@ class _MalformedThenValidProvider:
         return '{"prompt_markdown":"valid on retry","turn_kind":"question"}'
 
 
+class _StaticProvider:
+    def __init__(self, response: str) -> None:
+        self.response = response
+
+    def call(
+        self,
+        *,
+        tier: str,
+        prompt: str,
+        stream: bool = False,
+        timeout: float | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
+    ) -> str:
+        del tier, prompt, stream, timeout, json_schema, schema_name, max_completion_tokens
+        return self.response
+
+
 def test_cheap_timeout_returns_deterministic_placeholder() -> None:
     provider = _AlwaysTimeoutProvider()
     router = ModelRouter(provider, max_retries=1, sleep=lambda _: None)
@@ -95,6 +116,46 @@ def test_call_json_retries_after_malformed_json() -> None:
         "turn_kind": "question",
     }
     assert provider.calls == 2
+
+
+def test_router_records_llm_and_structured_failure_metrics() -> None:
+    metrics = MetricSink()
+    provider = _MalformedThenValidProvider()
+    router = ModelRouter(provider, max_retries=1, sleep=lambda _: None, metrics=metrics)
+
+    response = router.call_json(
+        tier="top",
+        prompt="hello",
+        schema={"prompt_markdown", "turn_kind"},
+    )
+
+    exported = metrics.export_prometheus()
+    assert response["turn_kind"] == "question"
+    assert 'llm_call_ms_count{component="router:top",outcome="ok"} 2' in exported
+
+
+def test_structured_call_json_records_decode_failures() -> None:
+    metrics = MetricSink()
+    router = ModelRouter(
+        _StaticProvider("wrapped {'not':'direct-json'}"),
+        max_retries=1,
+        sleep=lambda _: None,
+        metrics=metrics,
+    )
+
+    with contextlib.suppress(Exception):
+        router.call_json(
+            tier="mid",
+            prompt="hello",
+            schema={"signals"},
+            json_schema={"type": "object"},
+            schema_name="problem_scoring_result",
+        )
+
+    assert (
+        'structured_output_failures_total{component="problem_scoring_result",reason="json_decode"} 1'
+        in metrics.export_prometheus()
+    )
 
 
 class _AlwaysFailProvider:
