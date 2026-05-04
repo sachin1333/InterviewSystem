@@ -12,6 +12,10 @@ from urllib.error import HTTPError, URLError
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
 DEFAULT_OPENAI_REASONING_EFFORT = "low"
 
+# Models that accept the `reasoning_effort` parameter. Sending it to other
+# chat models (e.g. gpt-4o, gpt-4o-mini) yields a 400 from the OpenAI API.
+_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
 
 class OpenAIRouter:
     """OpenAI REST API provider using one fast model for every LLM task."""
@@ -81,8 +85,9 @@ class OpenAIRouter:
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
             ],
-            "reasoning_effort": self.reasoning_effort,
         }
+        if self._supports_reasoning_effort():
+            payload["reasoning_effort"] = self.reasoning_effort
         if stream:
             payload["stream"] = True
 
@@ -95,6 +100,10 @@ class OpenAIRouter:
             },
             method="POST",
         )
+
+    def _supports_reasoning_effort(self) -> bool:
+        name = self.model.lower()
+        return any(name.startswith(prefix) for prefix in _REASONING_MODEL_PREFIXES)
 
     @staticmethod
     def _extract_content(body: dict[str, Any]) -> str:
