@@ -30,3 +30,6 @@ interview.db
 .ruff_cache/
 .venv-*/
 .venv-ci/
+
+# Isolated agent worktrees
+.worktrees/
