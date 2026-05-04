@@ -63,6 +63,7 @@ from core.orchestrator import (
     RequestScoring,
     next_action,
 )
+from core.observability import GLOBAL_METRICS, MetricSink
 from core.pacing import Pacer
 from core.problem_bank import ProblemBank
 from core.problem_sequencer import EndSession as SeqEndSession
@@ -107,6 +108,7 @@ class SessionRunner:
     max_probes_per_problem: int = 6
     session_workspace_root: Path = Path("outputs") / "sessions"
     pacer: Pacer = field(default_factory=Pacer)
+    metric_sink: MetricSink = field(default_factory=lambda: GLOBAL_METRICS)
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -779,6 +781,10 @@ class SessionRunner:
             self._append(session_id, log, ScorerFailed(
                 dimension=dimension, reason=result.failure.reason,
             ), idem_key=f"scorer-failed:{artifact_id}:{dimension.value}")
+            self.metric_sink.increment(
+                "scorer_failure_total",
+                labels={"dimension": dimension.value},
+            )
 
         signal = result.signal
         if signal is None:
