@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from adapters.llm.router import ModelRouter
 from adapters.scorer.llm_communication_scorer import LlmCommunicationScorer
 from adapters.scorer.llm_experiment_design_scorer import LlmExperimentDesignScorer
+from adapters.scorer.llm_problem_framing_scorer import LlmProblemFramingScorer
 from adapters.scorer.llm_rationale_scorer import LlmRationaleScorer
 from core.domain import Artifact, ArtifactKind, Dimension
 
@@ -124,3 +125,43 @@ def test_experiment_design_scorer_scores_expected_dimension() -> None:
 
     assert signal.dimension == Dimension.experiment_design
     assert signal.value == 0.7
+
+
+def test_problem_framing_scorer_parses_signal_from_llm_json() -> None:
+    router = ModelRouter(
+        _StaticProvider(
+            '{"signals":[{"dimension":"problem_framing","value":0.8,"confidence":0.85,'
+            '"source_refs":["artifact://artifact-1"],"note":"Clearly defined the business objective"}]}'
+        ),
+        sleep=lambda _: None,
+    )
+    scorer = LlmProblemFramingScorer(router)
+
+    result = scorer.score_optional("sess-pf", _artifact("I would first define the objective metric and scope."))
+
+    assert result.signal is not None
+    assert result.failure is None
+    assert result.signal.dimension is Dimension.problem_framing
+    assert result.signal.value == 0.8
+    assert result.signal.confidence == 0.85
+
+
+def test_problem_framing_scorer_prompt_contains_format_instructions() -> None:
+    prompts: list[str] = []
+
+    class _CapturingProvider:
+        def call(self, *, tier: str, prompt: str, stream: bool = False, timeout: float | None = None) -> str:
+            del tier, stream, timeout
+            prompts.append(prompt)
+            return (
+                '{"signals":[{"dimension":"problem_framing","value":0.7,'
+                '"confidence":0.8,"source_refs":["artifact://artifact-1"]}]}'
+            )
+
+    router = ModelRouter(_CapturingProvider(), sleep=lambda _: None)
+    scorer = LlmProblemFramingScorer(router)
+    scorer.score_optional("sess-pf2", _artifact("Frame the problem first."))
+
+    assert prompts, "scorer must call the LLM"
+    assert "signals" in prompts[0], "prompt must include output format instructions"
+    assert "problem_framing" in prompts[0], "prompt must name the dimension"
