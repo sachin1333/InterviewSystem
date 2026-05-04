@@ -15,6 +15,7 @@ probe-or-close decision.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -138,14 +139,20 @@ class LlmExaminer(Examiner):
                 tier=tier_for("examiner.probe"),
                 prompt=prompt,
                 schema=schema,
-                deadline_ms=2000,
+                deadline_ms=int(os.environ.get("EXAMINER_DEADLINE_MS", "8000")),
             )
             outcome = self._parse_outcome(payload)
             return outcome, None
         except Exception as exc:
+            # Surface the underlying cause when ModelRouter wraps it.
+            cause = exc.__cause__ if exc.__cause__ is not None else exc
+            reason = (
+                f"{exc.__class__.__name__}: {exc}"
+                f" | cause={cause.__class__.__name__}: {cause}"
+            )
             return (
                 ExaminerOutcome(ok_to_advance=True),
-                ExaminerFailed(reason=str(exc) or exc.__class__.__name__),
+                ExaminerFailed(reason=reason or exc.__class__.__name__),
             )
 
     def iter_review(
