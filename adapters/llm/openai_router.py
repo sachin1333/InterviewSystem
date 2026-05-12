@@ -9,12 +9,14 @@ from typing import Any
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
+from adapters.llm.structured_schema import response_format
+
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
 DEFAULT_OPENAI_REASONING_EFFORT = "low"
+_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 
 # Models that accept the `reasoning_effort` parameter. Sending it to other
 # chat models (e.g. gpt-4o, gpt-4o-mini) yields a 400 from the OpenAI API.
-_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 
 
 class OpenAIRouter:
@@ -46,12 +48,21 @@ class OpenAIRouter:
         prompt: str,
         stream: bool = False,
         timeout: float | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> str | Iterator[str]:
         del tier  # All tasks use the same OpenAI model; tiers no longer select models.
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY not set; cannot call OpenAI")
 
-        req = self._build_request(prompt=prompt, stream=stream)
+        req = self._build_request(
+            prompt=prompt,
+            stream=stream,
+            json_schema=json_schema,
+            schema_name=schema_name,
+            max_completion_tokens=max_completion_tokens,
+        )
         if stream:
             return self._stream_request(req, timeout=timeout)
 
@@ -78,7 +89,15 @@ class OpenAIRouter:
             raise RuntimeError("OpenAI call failed") from last_exc
         raise RuntimeError("OpenAI call failed")
 
-    def _build_request(self, *, prompt: str, stream: bool) -> urllib_request.Request:
+    def _build_request(
+        self,
+        *,
+        prompt: str,
+        stream: bool,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
+    ) -> urllib_request.Request:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -90,6 +109,12 @@ class OpenAIRouter:
             payload["reasoning_effort"] = self.reasoning_effort
         if stream:
             payload["stream"] = True
+        if json_schema is not None:
+            payload["response_format"] = response_format(
+                schema_name or "structured_response", json_schema
+            )
+        if max_completion_tokens is not None:
+            payload["max_completion_tokens"] = max_completion_tokens
 
         return urllib_request.Request(
             self.base_url,
@@ -102,8 +127,7 @@ class OpenAIRouter:
         )
 
     def _supports_reasoning_effort(self) -> bool:
-        name = self.model.lower()
-        return any(name.startswith(prefix) for prefix in _REASONING_MODEL_PREFIXES)
+        return self.model.lower().startswith(_REASONING_MODEL_PREFIXES)
 
     @staticmethod
     def _extract_content(body: dict[str, Any]) -> str:

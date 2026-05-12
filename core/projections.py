@@ -18,6 +18,8 @@ from core.events import (
     RuntimeFailed,
     ScoreComputed,
     ScorerFailed,
+    ScoringCompleted,
+    ScoringRequested,
     SessionEnded,
     SessionStarted,
     SignalEmitted,
@@ -159,6 +161,8 @@ class ScoreStore:
     def __init__(self) -> None:
         self._scores: dict[str, Score] = {}
         self._problem_scores: dict[str, list[ProblemScoreInfo]] = {}
+        self._pending_problem_ids: dict[str, dict[ProblemId, None]] = {}
+        self._completed_problem_ids: dict[str, dict[ProblemId, None]] = {}
 
     def apply(self, envelope: Envelope) -> None:
         if isinstance(envelope.payload, ScoreComputed):
@@ -174,12 +178,29 @@ class ScoreStore:
                 )
             )
             bucket.sort(key=lambda entry: entry.ordinal)
+        elif isinstance(envelope.payload, ScoringRequested):
+            pending = self._pending_problem_ids.setdefault(envelope.session_id, {})
+            pending[envelope.payload.problem_id] = None
+        elif isinstance(envelope.payload, ScoringCompleted):
+            completed = self._completed_problem_ids.setdefault(envelope.session_id, {})
+            problem_id = envelope.payload.problem_id
+            self._pending_problem_ids.setdefault(envelope.session_id, {}).pop(problem_id, None)
+            completed[problem_id] = None
 
     def get(self, session_id: str) -> Score | None:
         return self._scores.get(session_id)
 
     def get_problem_scores(self, session_id: str) -> tuple[ProblemScoreInfo, ...]:
         return tuple(self._problem_scores.get(session_id, ()))
+
+    def is_scoring_pending(self, session_id: str) -> bool:
+        return bool(self._pending_problem_ids.get(session_id))
+
+    def pending_problem_ids(self, session_id: str) -> tuple[ProblemId, ...]:
+        return tuple(self._pending_problem_ids.get(session_id, ()))
+
+    def completed_problem_ids(self, session_id: str) -> tuple[ProblemId, ...]:
+        return tuple(self._completed_problem_ids.get(session_id, ()))
 
 
 class SignalStore:

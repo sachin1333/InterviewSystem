@@ -21,11 +21,12 @@ from core.events import (
     Envelope,
     ProblemClosed,
     ProblemIntroduced,
+    ProblemPlanSelected,
     ScoreComputed,
     SessionEnded,
     SessionStarted,
 )
-from core.problem_bank import ProblemBank
+from core.problem_bank import ProblemBank, ProblemBankEntry
 from core.session_boot import replay
 
 
@@ -91,6 +92,56 @@ def test_session_runner_draws_problem_sequence_from_bank(tmp_path: Path) -> None
     assert record["current_problem_id"] == expected_first.id
 
 
+def test_session_runner_uses_profile_tags_when_selecting_problem_plan(tmp_path: Path) -> None:
+    pricing_problem = Problem(
+        id=ProblemId("pricing"),
+        opener_text="Pricing experiment opener",
+        target_dimensions=(Dimension.experiment_design,),
+    )
+    generic_problem = Problem(
+        id=ProblemId("generic"),
+        opener_text="Generic framing opener",
+        target_dimensions=(Dimension.problem_framing,),
+    )
+    bank = ProblemBank(
+        [
+            ProblemBankEntry(problem=generic_problem, tags=("generic",)),
+            ProblemBankEntry(problem=pricing_problem, tags=("pricing", "experimentation")),
+        ],
+        version="test",
+    )
+    log = SqliteEventLog(tmp_path / "log.db")
+    router = ModelRouter(FakeRouter())
+    runner = SessionRunner(
+        challenger=LlmChallenger(router),
+        aggregator=_aggregator(tmp_path),
+        problem_bank=bank,
+    )
+    session_id = "sess-profile-pricing"
+    _append_started(log, session_id)
+    user_dir = tmp_path / "sessions" / session_id
+    user_dir.mkdir(parents=True)
+    (user_dir / "USER.md").write_text(
+        "Role: Growth Data Scientist\nSkills: pricing, experimentation\n",
+        encoding="utf8",
+    )
+    runner.session_workspace_root = tmp_path / "sessions"
+
+    result = runner.advance(session_id, log)
+
+    assert result.state == "await_input"
+    assert result.display_text == pricing_problem.opener_text
+    events = [env.payload for env in log.get_session(session_id)]
+    plans = [event for event in events if isinstance(event, ProblemPlanSelected)]
+    assert len(plans) == 1
+    assert plans[0].source == "profile_aware_selector"
+    assert plans[0].problem_ids[0] == pricing_problem.id
+    assert plans[0].selection_rationale[str(pricing_problem.id)] == (
+        "experimentation",
+        "pricing",
+    )
+
+
 def test_create_app_loads_problem_bank_for_new_sessions(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setenv("FAKE_LLM", "1")
     app = create_app(db_path=str(tmp_path / "app.db"))
@@ -101,6 +152,8 @@ def test_create_app_loads_problem_bank_for_new_sessions(tmp_path: Path, monkeypa
     assert len(runner.problem_bank) >= 4
     assert runner.problem_bank.prewarm_openers()[0]
     assert runner.examiner is not None
+    assert app.state.scoring_worker is not None
+    assert runner.scoring_worker is app.state.scoring_worker
 
 
 def test_create_app_chat_rubric_matches_scored_dimensions(tmp_path: Path, monkeypatch: Any) -> None:

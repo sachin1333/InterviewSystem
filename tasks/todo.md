@@ -157,3 +157,47 @@
 - Added recruiter session list and evidence source anchor links.
 - Added lightweight `/internal/metrics` and hash-only LLM audit helper.
 - Rewrote README to reflect current chat-first capabilities and deferred voice/full-sandbox scope.
+
+## 2026-05-04 — Implement latency/profile/scoring plan
+
+Plan: `docs/superpowers/plans/2026-05-04-latency-profile-alignment-scoring.md`
+Branch/worktree: `feature/latency-profile-scoring` at `.worktrees/latency-profile-scoring`
+
+- [x] Create isolated worktree and verify targeted baseline tests.
+- [x] Wave 1A: profile-aware selector module/tests.
+- [x] Wave 1B: OpenAI structured outputs support/tests.
+- [x] Wave 1C: scoring request/completion events and projection tests.
+- [x] Integrate Wave 1 in SessionRunner.
+- [x] Wave 2A: problem-level combined scorer.
+- [x] Wave 2B: background scoring worker.
+- [x] Wave 3A: async scoring integration and latency test.
+- [x] Wave 3B: result pending/partial/final score UX.
+- [x] Wave 3C: metrics and latency probe updates.
+- [x] Final verification and review notes.
+
+
+### Review — latency/profile/scoring implementation
+- Implemented profile-aware deterministic problem selection with persisted selection rationale.
+- Added OpenAI provider-native structured output request support and strict scoring schema helpers.
+- Added scoring request/completion events and pending/completed score projection state.
+- Added problem-level scorer with one structured LLM call per problem and deterministic bounded fallback.
+- Added in-process background scoring worker and production wiring in `create_app()`.
+- Updated `SessionRunner` to emit `ScoringRequested` and enqueue jobs when problems close, avoiding synchronous scorer calls on candidate-facing close/advance path when worker is configured.
+- Updated result page to show pending, partial, and final scoring states.
+- Added metrics helpers and latency probe stage reporting.
+- Verification run so far:
+  - targeted combined suite: 72 passed.
+  - full suite: `rtk uv run pytest -q` passed.
+  - `rtk uv run ruff check core adapters tools tests` passed.
+  - `rtk uv run mypy core adapters tests/unit/test_problem_selection.py tests/unit/test_problem_scorer.py tests/unit/test_background_scoring.py` passed.
+  - `rtk git diff --check` passed.
+- Final review subagent is still running; address any blocking findings before marking final item complete.
+
+
+### Follow-up review fixes
+- Fixed async final aggregation for problem-scoped background scoring by finalizing when all durable `ScoringRequested` problem jobs are completed, independent of legacy artifact × global-dimension scorer loop.
+- Added result/advance recovery for durable pending scoring requests so a restarted in-process worker can re-enqueue unfinished jobs from the event log.
+- Fixed strict structured-output schemas for OpenAI strict mode and wired examiner calls to provider-native schema.
+- Integrated LLM/scoring metrics and normalized HTTP metric route labels to avoid session IDs in metrics.
+- Made legacy scorer parser reject string scores.
+- Added regression tests for async final score and pending-job recovery.

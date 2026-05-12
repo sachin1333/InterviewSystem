@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Protocol
+from typing import Any, ClassVar, Literal, Protocol, cast
 
 from adapters.llm.task_tier_map import tier_for
 from core.contracts import Scorer
@@ -144,12 +144,12 @@ class BaseLlmScorer(Scorer):
 
         raw_value = raw_signal.get("value")
         raw_confidence = raw_signal.get("confidence")
-        if not isinstance(raw_value, (int, float, str)):
+        if type(raw_value) not in (int, float):
             raise ValueError("scorer signal missing value")
-        if not isinstance(raw_confidence, (int, float, str)):
+        if type(raw_confidence) not in (int, float):
             raise ValueError("scorer signal missing confidence")
-        value = float(raw_value)
-        confidence = float(raw_confidence)
+        value = float(cast(int | float, raw_value))
+        confidence = float(cast(int | float, raw_confidence))
         raw_refs = raw_signal.get("source_refs")
         source_refs: tuple[str, ...]
         if raw_refs is None:

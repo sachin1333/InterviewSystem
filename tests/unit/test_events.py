@@ -31,6 +31,8 @@ from core.events import (
     RuntimeFailed,
     ScoreComputed,
     ScorerFailed,
+    ScoringCompleted,
+    ScoringRequested,
     SessionEnded,
     SessionResumed,
     SessionStarted,
@@ -122,6 +124,42 @@ def test_turn_timing_observed_carries_ordered_server_checkpoints():
     assert timing.first_paint_ms >= timing.first_token_ms
 
 
+def test_scoring_requested_carries_problem_artifacts_and_dimensions():
+    event = ScoringRequested(
+        problem_id="fraud-risk",
+        artifact_ids=("answer-1", "code-1"),
+        dimensions=(Dimension.model_rationale, Dimension.experiment_design),
+    )
+
+    assert event.problem_id == "fraud-risk"
+    assert event.artifact_ids == ("answer-1", "code-1")
+    assert event.dimensions == (Dimension.model_rationale, Dimension.experiment_design)
+
+
+def test_scoring_completed_carries_problem_id():
+    event = ScoringCompleted(problem_id="fraud-risk")
+
+    assert event.problem_id == "fraud-risk"
+
+
+def test_problem_plan_selected_accepts_profile_aware_selector_rationales():
+    event = ProblemPlanSelected(
+        problem_ids=("fraud-risk",),
+        source="profile_aware_selector",
+        selection_rationale={"fraud-risk": ("candidate mentioned fraud", "tests ML tradeoffs")},
+    )
+
+    assert event.selection_rationale == {
+        "fraud-risk": ("candidate mentioned fraud", "tests ML tradeoffs")
+    }
+
+
+def test_problem_plan_selected_selection_rationale_defaults_empty():
+    event = ProblemPlanSelected(problem_ids=("fraud-risk",), source="explicit")
+
+    assert event.selection_rationale == {}
+
+
 def test_event_types_registry_covers_all_payloads():
     expected = {
         # lifecycle
@@ -133,7 +171,7 @@ def test_event_types_registry_covers_all_payloads():
         # runtime
         RuntimeExecuted, RuntimeFailed,
         # scoring
-        SignalEmitted, ScoreComputed, PerProblemScoreComputed,
+        SignalEmitted, ScoreComputed, PerProblemScoreComputed, ScoringRequested, ScoringCompleted,
         # adapter failures
         ChallengerFailed, ExaminerFailed, ScorerFailed,
         # voice

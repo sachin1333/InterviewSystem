@@ -61,3 +61,27 @@ def test_chat_probe_paint_stays_under_three_seconds_with_slow_model_fallback(tmp
 
     assert response.status_code == 200
     assert elapsed < 3.0, f"examiner probe paint took {elapsed:.3f}s"
+
+
+def test_latency_probe_formats_candidate_facing_stages_separately() -> None:
+    from tools.latency_probe import ProbeTiming, format_latency_probe_report
+
+    report = format_latency_probe_report(
+        n=2,
+        p50_ms=10.0,
+        p95_ms=20.0,
+        timings=(
+            ProbeTiming("post_submit", 12.3),
+            ProbeTiming("examiner_render", 45.6),
+            ProbeTiming("next_problem_render", None),
+            ProbeTiming("result_shell", 78.9),
+            ProbeTiming("background_scoring", None),
+        ),
+    )
+
+    assert "POST submit latency: 12.3ms" in report
+    assert "examiner render latency: 45.6ms" in report
+    assert "next-problem render latency: not observed" in report
+    assert "result shell latency: 78.9ms" in report
+    assert "background scoring duration: not observed" in report
+    assert "N=2  P50=10.0ms  P95=20.0ms" in report

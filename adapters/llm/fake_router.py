@@ -11,6 +11,7 @@ class FakeRouterCall(TypedDict):
     prompt_hash: str
     stream: bool
     timeout: float | None
+    structured: bool
 
 
 class FakeRouter:
@@ -46,7 +47,11 @@ class FakeRouter:
         prompt: str,
         stream: bool = False,
         timeout: float | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> str | Iterable[str]:
+        del schema_name, max_completion_tokens
         prompt_hash = self.prompt_hash(prompt)
         self.calls.append(
             {
@@ -54,6 +59,7 @@ class FakeRouter:
                 "prompt_hash": prompt_hash,
                 "stream": stream,
                 "timeout": timeout,
+                "structured": json_schema is not None,
             }
         )
         if self.latency:

@@ -79,6 +79,11 @@ class ProblemBank:
         """All validated problems in authoring order."""
         return tuple(entry.problem for entry in self._entries)
 
+    @property
+    def entries(self) -> tuple[ProblemBankEntry, ...]:
+        """All validated bank entries in authoring order, including metadata tags."""
+        return self._entries
+
     def tags_for(self, problem_id: ProblemId) -> tuple[str, ...]:
         """Return tags for a problem, or an empty tuple if unknown."""
         return self._tags_by_id.get(problem_id, ())

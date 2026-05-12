@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from adapters.llm.structured_schema import examiner_outcome_schema
 from adapters.llm.task_tier_map import tier_for
 from core.contracts import Examiner
 from core.domain import Dimension, Signal, Turn
@@ -40,6 +41,9 @@ class JsonModelRouter(Protocol):
         prompt: str,
         schema: set[str] | Mapping[str, object],
         deadline_ms: int | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> dict[str, Any]: ...
 
     def iter_streaming(
@@ -140,6 +144,9 @@ class LlmExaminer(Examiner):
                 prompt=prompt,
                 schema=schema,
                 deadline_ms=int(os.environ.get("EXAMINER_DEADLINE_MS", "8000")),
+                json_schema=examiner_outcome_schema(),
+                schema_name="examiner_outcome",
+                max_completion_tokens=500,
             )
             outcome = self._parse_outcome(payload)
             return outcome, None

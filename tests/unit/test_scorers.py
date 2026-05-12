@@ -69,6 +69,24 @@ def test_rationale_scorer_parses_signal_from_llm_json() -> None:
     assert result.signal.confidence == 0.8
 
 
+def test_legacy_scorer_rejects_string_scores_and_uses_fallback() -> None:
+    router = ModelRouter(
+        _StaticProvider(
+            '{"signals":[{"dimension":"model_rationale","value":"0.7","confidence":0.8,'
+            '"source_refs":["artifact://artifact-1"],"note":"String score must be rejected"}]}'
+        ),
+        sleep=lambda _: None,
+    )
+    scorer = LlmRationaleScorer(router)
+
+    result = scorer.score_optional("sess-1", _artifact("I chose a baseline because it is clear."))
+
+    assert result.failure is not None
+    assert result.signal is not None
+    assert result.signal.emitted_by.endswith(":heuristic")
+    assert result.signal.confidence == 0.2
+
+
 def test_communication_scorer_uses_low_confidence_fallback_on_failure() -> None:
     router = ModelRouter(_FailingProvider(), max_retries=1, sleep=lambda _: None)
     scorer = LlmCommunicationScorer(router)

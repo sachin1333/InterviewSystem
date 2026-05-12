@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import time
@@ -7,7 +8,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from core.observability import AuditLogger
+from core.observability import AuditLogger, MetricSink
 
 type Tier = Literal["cheap", "mid", "top"]
 type RouterResponse = str | Iterable[str]
@@ -34,6 +35,9 @@ class RouterProvider(Protocol):
         prompt: str,
         stream: bool = False,
         timeout: float | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> RouterResponse: ...
 
 
@@ -54,6 +58,7 @@ class ModelRouter:
         max_retries: int = 3,
         sleep: Callable[[float], None] = time.sleep,
         audit_logger: AuditLogger | None = None,
+        metrics: MetricSink | None = None,
     ) -> None:
         self.provider = provider
         self.cheap_timeout = cheap_timeout
@@ -62,6 +67,7 @@ class ModelRouter:
         self.max_retries = max_retries
         self.sleep = sleep
         self.audit_logger = audit_logger
+        self.metrics = metrics
 
     def call(
         self,
@@ -69,6 +75,9 @@ class ModelRouter:
         prompt: str,
         stream: bool = False,
         deadline_ms: int | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> RouterResponse:
         tier_timeout = self._get_timeout(tier)
         deadline = (
@@ -85,12 +94,24 @@ class ModelRouter:
                 min(remaining, tier_timeout) if remaining is not None else tier_timeout
             )
             try:
+                call_started = time.monotonic()
                 response = self.provider.call(
-                    tier=tier,
-                    prompt=prompt,
-                    stream=stream,
-                    timeout=effective_timeout,
+                        **self._provider_call_kwargs(
+                            tier=tier,
+                            prompt=prompt,
+                            stream=stream,
+                            timeout=effective_timeout,
+                            json_schema=json_schema,
+                        schema_name=schema_name,
+                        max_completion_tokens=max_completion_tokens,
+                    )
                 )
+                if self.metrics is not None:
+                    self.metrics.observe_llm_call(
+                        component=f"router:{tier}",
+                        elapsed_ms=(time.monotonic() - call_started) * 1000,
+                        outcome="ok",
+                    )
                 if self.audit_logger is not None and isinstance(response, str):
                     self.audit_logger.record_llm_call(
                         agent_name=f"router:{tier}",
@@ -100,14 +121,32 @@ class ModelRouter:
                     )
                 return response
             except TimeoutError as exc:
+                if self.metrics is not None:
+                    self.metrics.observe_llm_call(
+                        component=f"router:{tier}",
+                        elapsed_ms=(time.monotonic() - call_started) * 1000,
+                        outcome="timeout",
+                    )
                 last_exc = exc
                 if deadline is None or (deadline - time.monotonic()) > 0:
                     fallback = self._call_fallback(
-                        tier=tier, prompt=prompt, stream=stream, deadline=deadline,
+                        tier=tier,
+                        prompt=prompt,
+                        stream=stream,
+                        deadline=deadline,
+                        json_schema=json_schema,
+                        schema_name=schema_name,
+                        max_completion_tokens=max_completion_tokens,
                     )
                     if fallback is not None:
                         return fallback
             except Exception as exc:
+                if self.metrics is not None:
+                    self.metrics.observe_llm_call(
+                        component=f"router:{tier}",
+                        elapsed_ms=(time.monotonic() - call_started) * 1000,
+                        outcome="error",
+                    )
                 last_exc = exc
 
             if attempt < self.max_retries:
@@ -126,7 +165,39 @@ class ModelRouter:
         prompt: str,
         schema: set[str] | Mapping[str, object],
         deadline_ms: int | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> dict[str, Any]:
+        if json_schema is not None:
+            response = self.call(
+                tier=tier,
+                prompt=prompt,
+                stream=False,
+                deadline_ms=deadline_ms,
+                json_schema=json_schema,
+                schema_name=schema_name,
+                max_completion_tokens=max_completion_tokens,
+            )
+            try:
+                parsed = json.loads(self._response_text(response))
+            except json.JSONDecodeError:
+                if self.metrics is not None:
+                    self.metrics.increment_structured_output_failure(
+                        component=schema_name or "structured_call",
+                        reason="json_decode",
+                    )
+                raise
+            if not isinstance(parsed, dict):
+                if self.metrics is not None:
+                    self.metrics.increment_structured_output_failure(
+                        component=schema_name or "structured_call",
+                        reason="not_object",
+                    )
+                raise ValueError("model did not return a JSON object")
+            self._raise_if_missing_required_keys(parsed, schema)
+            return parsed
+
         for attempt in range(2):
             response = self.call(
                 tier=tier, prompt=prompt, stream=False, deadline_ms=deadline_ms
@@ -144,14 +215,13 @@ class ModelRouter:
                     continue
                 raise ValueError("model did not return a JSON object")
 
-            required_keys = schema if isinstance(schema, set) else set(schema)
-            missing = required_keys - set(parsed)
-            if not missing:
-                return parsed
-
-            if attempt == 0:
-                continue
-            raise ValueError(f"model JSON missing required keys: {sorted(missing)}")
+            try:
+                self._raise_if_missing_required_keys(parsed, schema)
+            except ValueError:
+                if attempt == 0:
+                    continue
+                raise
+            return parsed
 
         raise AssertionError("unreachable")
 
@@ -215,6 +285,9 @@ class ModelRouter:
         prompt: str,
         stream: bool,
         deadline: float | None = None,
+        json_schema: dict[str, object] | None = None,
+        schema_name: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> RouterResponse | None:
         """Timeout fallback chain: top -> mid -> cheap -> placeholder.
 
@@ -238,24 +311,83 @@ class ModelRouter:
             if deadline is not None:
                 fallback_timeout = min(fallback_timeout, deadline - time.monotonic())
             return self.provider.call(
-                tier=fallback_tier,
-                prompt=prompt,
-                stream=stream,
-                timeout=fallback_timeout,
+                    **self._provider_call_kwargs(
+                        tier=fallback_tier,
+                        prompt=prompt,
+                        stream=stream,
+                    timeout=fallback_timeout,
+                    json_schema=json_schema,
+                    schema_name=schema_name,
+                    max_completion_tokens=max_completion_tokens,
+                )
             )
         except TimeoutError:
             return self._call_fallback(
-                tier=fallback_tier, prompt=prompt, stream=stream, deadline=deadline,
+                tier=fallback_tier,
+                prompt=prompt,
+                stream=stream,
+                deadline=deadline,
+                json_schema=json_schema,
+                schema_name=schema_name,
+                max_completion_tokens=max_completion_tokens,
             )
         except Exception:
             return self._call_fallback(
-                tier=fallback_tier, prompt=prompt, stream=stream, deadline=deadline,
+                tier=fallback_tier,
+                prompt=prompt,
+                stream=stream,
+                deadline=deadline,
+                json_schema=json_schema,
+                schema_name=schema_name,
+                max_completion_tokens=max_completion_tokens,
             )
 
     def _placeholder_response(self, *, stream: bool) -> RouterResponse:
         if stream:
             return (chunk for chunk in (CHEAP_TIMEOUT_PLACEHOLDER,))
         return CHEAP_TIMEOUT_PLACEHOLDER
+
+    def _provider_call_kwargs(
+        self,
+        *,
+        tier: Tier,
+        prompt: str,
+        stream: bool,
+        timeout: float | None,
+        json_schema: dict[str, object] | None,
+        schema_name: str | None,
+        max_completion_tokens: int | None,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "tier": tier,
+            "prompt": prompt,
+            "stream": stream,
+            "timeout": timeout,
+        }
+        if json_schema is not None and self._provider_accepts_structured_kwargs():
+            kwargs["json_schema"] = json_schema
+            kwargs["schema_name"] = schema_name
+            kwargs["max_completion_tokens"] = max_completion_tokens
+        return kwargs
+
+    def _provider_accepts_structured_kwargs(self) -> bool:
+        try:
+            parameters = inspect.signature(self.provider.call).parameters
+        except (TypeError, ValueError):
+            return True
+        return "json_schema" in parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+
+    @staticmethod
+    def _raise_if_missing_required_keys(
+        parsed: dict[str, Any], schema: set[str] | Mapping[str, object]
+    ) -> None:
+        required_keys = schema if isinstance(schema, set) else set(schema)
+        missing = required_keys - set(parsed)
+        if missing:
+            raise ValueError(f"model JSON missing required keys: {sorted(missing)}")
 
     @staticmethod
     def _response_text(response: RouterResponse) -> str:
