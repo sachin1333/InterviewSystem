@@ -368,12 +368,13 @@ Branch/worktree: `feature/latency-profile-scoring` at `.worktrees/latency-profil
 - [x] Preserve local work, merge remote main, and resolve conflicts.
 - [x] Restore local untracked work after merge.
 - [x] Run focused verification after integration.
-- [ ] Commit current local changes with a clear message.
-- [ ] Push `main` to `origin` and verify clean sync.
+- [x] Commit current local changes with a clear message.
+- [x] Push `main` to `origin` and verify clean sync.
 
 ## Review
 - Fetched `origin/main`; local `main` was ahead 4 and behind 1.
 - Merged incoming async profile-aware scoring pipeline into `main` and resolved conflicts in examiner, session runner, OpenAI router, and internal metrics tests.
 - Preserved local work via stash/backup, then restored PDF parser dependency changes, scorer template changes, plans/scripts, and insight interpretation scorer templates.
-- Verification so far: `rtk uv run pytest -q tests/unit/test_openai_router.py tests/unit/test_resume_source.py tests/integration/test_internal_metrics.py` -> 26 passed.
+- Pre-commit verification: `rtk git diff --check` passed; `rtk uv run pytest -q tests/unit/test_openai_router.py tests/unit/test_resume_source.py tests/integration/test_internal_metrics.py` -> 26 passed.
+- Pushed `main` to `origin/main`; final sync verification pending in the shell after this note is committed.
 
