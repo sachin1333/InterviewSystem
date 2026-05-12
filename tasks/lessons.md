@@ -2,6 +2,14 @@
 
 Running log of self-correction patterns. Append after every user-triggered correction.
 
+## 2026-05-03 · Live test surfaced openai_router param bug
+
+- **`reasoning_effort` is model-gated, not global.** OpenAI's `chat/completions` accepts `reasoning_effort` only on reasoning models (o1/o3/o4/gpt-5*). Sending it to `gpt-4o` / `gpt-4o-mini` returns 400 → router fails → examiner falls back to canned probe → coverage stalls. Bug: `openai_router._build_request` always sent the field. Fix: gate on `_REASONING_MODEL_PREFIXES`. Pattern: any provider param that exists on some models but not others must be conditional on model id, not unconditionally attached. Add a parametrized test pair (included models / excluded models) when introducing such params.
+- **Default model id was a placeholder.** `DEFAULT_OPENAI_MODEL = "gpt-5.5"` shipped as default — a model id that does not resolve. Pattern: defaults must point at a real, generally-available model. Treat unresolved-model 404s as a release blocker, not a config issue, when the default itself is wrong.
+- **Live drive caught what tests missed.** 213 unit tests green, but the smoke uncovered the param bug because the test suite asserted `reasoning_effort` was *present*, not that the model would *accept* it. Pattern: when wrapping an external API, mock the upstream response codes too — at minimum, a test that asserts the request would not 400 against a documented schema.
+
+
+
 ## 2026-04-21 · Architecture review pass
 
 - **Ambiguity first, always.** User asked "review and validate the system design and plan." Multiple valid interpretations existed (gap vs quality, one doc vs two, report vs redline). Used AskUserQuestion before any work. Pattern: whenever a deliverable word (review/validate/plan/design) is modified by "the", surface interpretations before doing work.

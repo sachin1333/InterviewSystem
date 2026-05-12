@@ -26,4 +26,6 @@ Return exactly one JSON object:
 }
 ```
 
+**Value range:** `value` and `confidence` MUST each be a decimal number between 0.0 and 1.0 inclusive. Never return a value greater than 1.0 or less than 0.0.
+
 If the turn contains no problem framing content (pure code execution, no reasoning), return `{ "signals": [] }`. Do not invent signals.

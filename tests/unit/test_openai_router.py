@@ -23,7 +23,7 @@ class _FakeResponse:
         return json.dumps(self._body).encode("utf-8")
 
 
-def test_openai_router_uses_single_gpt55_fast_model_for_all_tiers(
+def test_openai_router_uses_single_default_model_for_all_tiers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payloads: list[dict[str, Any]] = []
@@ -34,14 +34,21 @@ def test_openai_router_uses_single_gpt55_fast_model_for_all_tiers(
         return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
 
     monkeypatch.setattr("adapters.llm.openai_router.urllib_request.urlopen", fake_urlopen)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
     router = OpenAIRouter(api_key="test-key")
 
     assert router.call(tier="cheap", prompt="first") == "ok"
     assert router.call(tier="mid", prompt="second") == "ok"
     assert router.call(tier="top", prompt="third") == "ok"
 
-    assert [payload["model"] for payload in payloads] == ["gpt-5.5", "gpt-5.5", "gpt-5.5"]
-    assert [payload["reasoning_effort"] for payload in payloads] == ["low", "low", "low"]
+    assert [payload["model"] for payload in payloads] == [
+        "gpt-5.5",
+        "gpt-5.5",
+        "gpt-5.5",
+    ]
+    # Default model is a reasoning model, so fast reasoning should be sent.
+    for payload in payloads:
+        assert payload["reasoning_effort"] == "low"
 
 
 def test_openai_router_allows_one_explicit_model_override_not_per_tier(
@@ -63,7 +70,8 @@ def test_openai_router_allows_one_explicit_model_override_not_per_tier(
     assert router.call(tier="top", prompt="hello") == "ok"
 
     assert payloads[0]["model"] == "gpt-test-single"
-
+    # Custom non-reasoning model name → reasoning_effort is omitted.
+    assert "reasoning_effort" not in payloads[0]
 
 def _payload_from_request(request: Any) -> dict[str, Any]:
     return json.loads(request.data.decode("utf-8"))
@@ -116,3 +124,44 @@ def test_openai_router_only_sends_reasoning_effort_for_supported_reasoning_model
 
     assert reasoning_payload["reasoning_effort"] == "low"
     assert "reasoning_effort" not in non_reasoning_payload
+
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-5", "gpt-5.5", "gpt-5-mini", "o1", "o1-mini", "o3", "o3-mini", "o4-mini"],
+)
+def test_openai_router_includes_reasoning_effort_for_reasoning_models(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    payloads: list[dict[str, Any]] = []
+
+    def fake_urlopen(request: Any, timeout: float | None = None) -> _FakeResponse:
+        del timeout
+        payloads.append(json.loads(request.data.decode("utf-8")))
+        return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr("adapters.llm.openai_router.urllib_request.urlopen", fake_urlopen)
+    router = OpenAIRouter(api_key="test-key", model=model, reasoning_effort="low")
+
+    assert router.call(tier="top", prompt="hi") == "ok"
+    assert payloads[0]["reasoning_effort"] == "low"
+
+
+@pytest.mark.parametrize(
+    "model", ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "claude-3"]
+)
+def test_openai_router_omits_reasoning_effort_for_chat_models(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    payloads: list[dict[str, Any]] = []
+
+    def fake_urlopen(request: Any, timeout: float | None = None) -> _FakeResponse:
+        del timeout
+        payloads.append(json.loads(request.data.decode("utf-8")))
+        return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr("adapters.llm.openai_router.urllib_request.urlopen", fake_urlopen)
+    router = OpenAIRouter(api_key="test-key", model=model, reasoning_effort="low")
+
+    assert router.call(tier="top", prompt="hi") == "ok"
+    assert "reasoning_effort" not in payloads[0]
+

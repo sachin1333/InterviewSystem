@@ -201,3 +201,179 @@ Branch/worktree: `feature/latency-profile-scoring` at `.worktrees/latency-profil
 - Integrated LLM/scoring metrics and normalized HTTP metric route labels to avoid session IDs in metrics.
 - Made legacy scorer parser reject string scores.
 - Added regression tests for async final score and pending-job recovery.
+
+---
+
+# Current Task — Verify OpenAI LLM Configuration
+
+## Scope
+- Check runtime OpenAI model loading path and current `.env` values without exposing secrets.
+- Align default model fallback with requested `gpt-5.5` if needed.
+- Verify focused router/factory tests.
+
+## Plan
+- [x] Inspect `.env.example`, `config/models.yaml`, runtime factory, and OpenAI router.
+- [x] Confirm local `.env` has `OPENAI_MODEL=gpt-5.5` and `OPENAI_REASONING_EFFORT=low` with API key set.
+- [x] Update mismatched code fallback default/tests.
+- [x] Run focused tests and document result.
+
+## Review
+- Local `.env` is present with `OPENAI_API_KEY` set, `OPENAI_MODEL=gpt-5.5`, and `OPENAI_REASONING_EFFORT=low`.
+- Runtime factory verification loads `OpenAIRouter(model=gpt-5.5, reasoning_effort=low)` without exposing the key.
+- Aligned `DEFAULT_OPENAI_MODEL` fallback to `gpt-5.5` so behavior remains correct even if `.env` omits `OPENAI_MODEL`.
+- Verification: `rtk uv run pytest -q tests/unit/test_openai_router.py tests/unit/test_llm_factory.py` -> 19 passed; `rtk uv run ruff check adapters/llm/openai_router.py tests/unit/test_openai_router.py tests/unit/test_llm_factory.py` -> pass; `rtk git diff --check` -> pass.
+
+---
+
+# Current Task — Real LLM End-to-End Chat Latency Check
+
+## Scope
+- Use local `.env` real OpenAI config, not `FAKE_LLM`.
+- Exercise the HTTP chat path end-to-end: create session, first render, submit answer, examiner/progression, scoring/result.
+- Capture per-request wall-clock and persisted `TurnTimingObserved` events without printing secrets.
+
+## Plan
+- [x] Inspect chat app/runner entry points and identify a safe E2E harness.
+- [x] Run real LLM-config smoke with network access.
+- [x] Extract event-level timing records and final score/session status.
+- [x] Document latency breakdown, caveats, and any failures.
+
+## Review
+- Real config loaded: `OpenAIRouter`, `OPENAI_MODEL=gpt-5.5`, `OPENAI_REASONING_EFFORT=low`, `FAKE_LLM` unset, API key present.
+- E2E HTTP flow reached `SessionEnded` and `ScoreComputed` through fallback/heuristic degradation.
+- OpenAI API calls did not succeed: direct config probe returned `429 Too Many Requests` / quota exceeded. Therefore this run verifies real-config wiring and graceful degradation, not successful live model generation.
+- Main E2E run: session `s-0bcf555e099d`; POST create 4 ms; first GET 10917 ms; POST answer 3 ms; GET examiner 7841 ms; POST defense 3 ms; GET scoring/end 29133 ms; result render 7 ms.
+- Event timings: candidate submit 0 ms paint; examiner probe first token 7833 ms / first paint 7837 ms; second candidate submit 0 ms.
+- LLM attempts: challenger 3 failed attempts totaling ~10592 ms; examiner 3 failed attempts totaling ~7522 ms; scorers 12 failed attempts totaling ~27877 ms.
+- Direct probe: `rtk uv run python /private/tmp/openai_config_probe.py` -> model/key loaded but OpenAI returned quota 429.
+
+---
+
+# Current Task — Retry Real LLM E2E After OpenAI Key Update
+
+## Scope
+- Re-run the real OpenAI chat E2E latency smoke after `.env` key update.
+- Confirm whether OpenAI calls now succeed and capture per-step latency.
+
+## Plan
+- [x] Run direct real-config probe.
+- [x] Run E2E chat latency smoke.
+- [x] Summarize HTTP, LLM, event timing, score, and failures if any.
+
+## Review
+- Direct probe succeeded: `model=gpt-5.5 reasoning_effort=low key_set=True` -> `ok`.
+- E2E session `s-714bf89f05a1` reached `SessionEnded` and `ScoreComputed` with all OpenAI calls successful.
+- HTTP timings: create 4 ms; first interviewer render 15140 ms; answer POST 3 ms; examiner GET 3741 ms; defense POST 3 ms; scoring/end GET 17551 ms; result render 7 ms.
+- LLM timings: challenger 15125 ms; examiner 3735 ms; model_rationale scorers 6393 ms + 3819 ms; communication scorers 3754 ms + 3572 ms.
+- Event timings: examiner probe first token 3736 ms / first paint 3737 ms; candidate submit event paints 0 ms.
+- Final score: composite 0.774; model_rationale 0.900; communication 0.620.
+
+---
+
+# Current Task — Real LLM Probe + Candidate-Aligned Problem Flow Check
+
+## Scope
+- Use real OpenAI config with `FAKE_LLM` unset.
+- Exercise multi-problem chat flow with candidate profile context.
+- Verify whether the system asks probes within a problem based on candidate responses.
+- Verify whether subsequent problems align with candidate experience/profile.
+
+## Plan
+- [x] Inspect problem bank/sequencer behavior for multi-problem flow.
+- [x] Run real LLM E2E with candidate profile and multiple answers.
+- [x] Extract introduced problems, examiner probes, candidate turns, closures, and scores/failures.
+- [x] Summarize evidence and latency per step.
+
+## Review
+- Real config loaded: `OpenAIRouter`, `OPENAI_MODEL=gpt-5.5`, `OPENAI_REASONING_EFFORT=low`, `FAKE_LLM` unset.
+- Session `s-5e8445d52086` completed with 4 introduced problems and score computed.
+- Problem plan: churn framing/data quality, drift stakeholder communication, A/B pricing interpretation, model selection propensity.
+- Candidate profile used: senior growth DS with A/B testing, pricing experiments, propensity models, churn analytics, model monitoring, stakeholder communication. The selected problem topics aligned with those declared experiences, but code inspection shows selection is deterministic by `session_id` and dimension coverage, not dynamically profile-ranked.
+- Probing worked: each problem got at least 1 examiner probe; the propensity problem got 2 probes because the first defense did not specify a time split.
+- HTTP timings: first render 5 ms; probe/render GETs 3858, 2422, 3242, 3484, 4098, 2036, 3748, 3409 ms; final score/end GET 338627 ms. Candidate POSTs were 1-4 ms.
+- Examiner LLM timings were roughly 2.0-4.1s per call. Final scoring was slow because production scored 9 candidate artifacts across 5 dimensions sequentially, producing 46+ scorer calls/retries.
+- Final score: composite 0.577; problem_framing 0.433; model_rationale 0.914; experiment_design 0.437; insight_interp 0.367; communication 0.603.
+- Scorer payload robustness issue observed: several scorer calls returned non-JSON/string/out-of-range values and fell back to heuristics, while session still completed.
+
+---
+
+# Current Task — Solution Design for Profile Alignment, Scoring Latency, and Malformed Scorer Outputs
+
+## Scope
+- Design fixes that preserve event-sourced architecture and target 1-3s max for user-facing steps.
+- Cover profile-aware problem selection, scoring latency, and structured scorer robustness.
+- Do not implement yet; provide recommended system design and phased plan.
+
+## Plan
+- [x] Use real E2E evidence from previous runs as baseline.
+- [x] Inspect current problem bank/picker, session runner, router, and scorer behavior.
+- [x] Check current OpenAI guidance for latency optimization and Structured Outputs.
+- [ ] Propose best-fit architecture changes and target latency budget.
+
+
+---
+
+# Current Task — Create Parallel Task List for Latency/Profile/Scoring Fixes
+
+## Scope
+- Convert proposed solutions into an implementation task list.
+- Identify parallelizable workstreams and dependencies.
+- Save the detailed plan under docs/superpowers/plans.
+
+## Plan
+- [x] Review existing design recommendation and current architecture files.
+- [x] Create task plan with parallelization map, file ownership, tests, and acceptance criteria.
+- [x] Save plan to `docs/superpowers/plans/2026-05-04-latency-profile-alignment-scoring.md`.
+
+## Review
+- Plan decomposes work into profile-aware selection, structured outputs, scoring event contracts, problem-level scoring, background worker, async SessionRunner integration, result UI states, and observability/latency tests.
+- Parallel waves are documented so independent workers can proceed with disjoint write sets.
+
+
+---
+
+# Current Task — Fix PDF Resume Upload Parsing Dependency
+
+## Scope
+- Diagnose why PDF resume uploads return `400 Bad Request: pdf resume parsing requires pdfminer.six`.
+- Ensure the runtime environment installs the PDF parser required by `ResumeSource`.
+- Add a regression check so packaging cannot drop the dependency silently.
+
+## Plan
+- [x] Reproduce missing `pdfminer` import in the project runtime.
+- [x] Add failing packaging regression test for PDF parser dependency.
+- [x] Add the minimal runtime dependency and refresh lock metadata.
+- [x] Verify focused tests and import behavior.
+
+## Review
+- Root cause: `ResumeSource._pdf_text()` imports `pdfminer.high_level`, but `pdfminer-six` was not declared in `pyproject.toml`/`uv.lock`, so PDF uploads failed before candidate intake.
+- Added `pdfminer-six>=20250506` as a runtime dependency and refreshed `uv.lock`.
+- Added a packaging regression test to ensure PDF resume parser dependency remains declared.
+- Verification: `rtk uv run pytest -q tests/unit/test_resume_source.py` -> 4 passed; `rtk uv run python -c "import pdfminer.high_level; print('pdfminer ok')"` -> pdfminer ok.
+
+
+---
+
+# Current Task — Merge Latest Main and Push Remote
+
+## Scope
+- Preserve current working-tree changes.
+- Integrate remote `origin/main` into local `main`.
+- Commit local work if needed and push `main` to `origin`.
+
+## Plan
+- [x] Inspect branch, remotes, and dirty state.
+- [x] Fetch latest `origin/main`.
+- [x] Review incoming/local divergence and conflicts risk.
+- [x] Preserve local work, merge remote main, and resolve conflicts.
+- [x] Restore local untracked work after merge.
+- [x] Run focused verification after integration.
+- [ ] Commit current local changes with a clear message.
+- [ ] Push `main` to `origin` and verify clean sync.
+
+## Review
+- Fetched `origin/main`; local `main` was ahead 4 and behind 1.
+- Merged incoming async profile-aware scoring pipeline into `main` and resolved conflicts in examiner, session runner, OpenAI router, and internal metrics tests.
+- Preserved local work via stash/backup, then restored PDF parser dependency changes, scorer template changes, plans/scripts, and insight interpretation scorer templates.
+- Verification so far: `rtk uv run pytest -q tests/unit/test_openai_router.py tests/unit/test_resume_source.py tests/integration/test_internal_metrics.py` -> 26 passed.
+
